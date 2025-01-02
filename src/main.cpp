@@ -19,22 +19,28 @@ class Mode {
     // логика светодиодов (прописывается отдельно в каждом классе)
     virtual void calculate(CRGB* leds, const long* ledCount) {}
     // основная логика таймера и вызов функции calculate
-    void show(CRGB* leds, const long* ledCount) {
-        if (int(millis() % int(float(delayTime) / speed * 100)) <= 1) {
+    void show(CRGB* leds, const long* ledCount, uint32_t* timer) {
+        if (millis() - *timer > float(delayTime) / speed * 100) {
+            *timer = millis();
             calculate(leds, ledCount);
             FastLED.setBrightness(brightness);
             FastLED.show();
         }
     }
     // рассчитывает яркость светодиода для бегущего огонька (в HSV это 3-ий параметр)
-    byte calculateRunLight(long* i, byte* gap, byte* tailSize, bool* direction, byte* run, uint16_t* delayRunTime) {
-        if (uint32_t(millis() / int(float(delayTime) / speed * 100)) % (*delayRunTime / delayTime) == 0 && *i == 0) {
+    byte calculateRunLight(long* i, byte gap, byte tailSize, bool direction,
+        byte* run, uint16_t delayRunTime, byte* moveCounter) {
+        if (/*uint32_t(millis() / int(float(delayTime) / speed * 100)) % (delayRunTime / delayTime) == 0*/
+            *moveCounter >= delayRunTime / delayTime + bool(delayRunTime % delayTime) && *i == 0) {
+            *moveCounter = 0;
             (*run)++;
-            if (*run > *gap)
+            if (*run > gap)
                 *run = 0;
         }
-        return direction ? max(0, 255 - max((int(*i) + *run) % (*gap + 1), 0) * 255 / (*tailSize + 1)) :
-            max(0, 255 - max(*gap - (*gap + int(*i) - *run) % (*gap + 1), 0) * 255 / (*tailSize + 1));
+        else
+            (*moveCounter)++;
+        return direction ? max(0, 255 - max((int(*i) + *run) % (gap + 1), 0) * 255 / (tailSize + 1)) :
+            max(0, 255 - max(gap - (gap + int(*i) - *run) % (gap + 1), 0) * 255 / (tailSize + 1));
     }
     // рассчитывает оттенок для режимов, изпользующих радугу
     byte calculateRainbow(long i, byte* base, byte rainbowCount, const long* ledCount, bool twoSides) {
@@ -54,7 +60,7 @@ class Mode {
 class SingleColor : public Mode {
     public: SingleColor(int delayTime, int delayRunLightTime) {
         this->delayTime = delayTime;
-        this->delayRunLightTime = delayRunLightTime;
+        this->runLightDelay = delayRunLightTime;
     }
     void setParam(String& parameters) override {
         Mode::setParam(parameters);
@@ -93,22 +99,23 @@ class SingleColor : public Mode {
     }
     void calculate(CRGB* leds, const long* ledCount) override {
         for (long i = 0; i < *ledCount / (twoSides + 1) + twoSides * (*ledCount % 2); i++) {
-            byte brightnessForEachLed = calculateRunLight(&i, &gap, &tailSize, &direction, &run, &delayRunLightTime);
-            byte rainbowShade = calculateRainbow(i, &base, rainbowCount, ledCount, twoSides);
+            byte brightnessForLed = calculateRunLight(&i, gap, tailSize, direction, &run, runLightDelay, &moveCounter);
+            byte rainbowHue = calculateRainbow(i, &base, rainbowCount, ledCount, twoSides);
             leds[direction ? i : *ledCount / (twoSides + 1) - i - 1 + twoSides] =
-                CHSV(isRainbow ? rainbowShade : hue,
-                    255 - saturation, isRunningLight ? float(brightnessForEachLed) / 255 * value : value);
+                CHSV(isRainbow ? rainbowHue : hue,
+                    255 - saturation, isRunningLight ? float(brightnessForLed) / 255 * value : value);
             if (twoSides)
                 leds[direction ? *ledCount - i - 1 : i + *ledCount / 2] =
-                    CHSV(isRainbow ? rainbowShade : hue,
-                        255 - saturation, isRunningLight ? float(brightnessForEachLed) / 255 * value : value);
+                    CHSV(isRainbow ? rainbowHue : hue,
+                        255 - saturation, isRunningLight ? float(brightnessForLed) / 255 * value : value);
         }
     }
     private:
     byte run = 0;
+    byte moveCounter = 0;
     byte base = 0;
     // настраиваемые параметры
-    uint16_t delayRunLightTime;
+    uint16_t runLightDelay;
     byte hue = 0, saturation = 0, value = 255;
     byte gap = 9;
     byte tailSize = 6;
@@ -126,7 +133,6 @@ class Party : public Mode {
     }
     void startMode() override {
         FastLED.clear();
-        FastLED.show();
     }
     void setParam(String &parameters) {
         Mode::setParam(parameters);
@@ -156,10 +162,7 @@ class Party : public Mode {
                 baseStep = parameters.toInt() / 100;
             break;
             case 11:
-                minHue = parameters.toInt() / 100;
-            break;
-            case 12:
-                maxHue = parameters.toInt() / 100;
+                hueGap = parameters.toInt() / 100;
             break;
         }
     }
@@ -173,8 +176,8 @@ class Party : public Mode {
         while (free - *ledCount / ratio > 0) {
             long i = random(0, *ledCount);
             if (rgb2hsv_approximate(leds[i]).raw[2] == 0) {
-                leds[i] = CHSV(random(minHue, maxHue) + base * isRainbowGoing,
-                    random(minSaturation, maxSaturation), random(minBrightness, maxBrightness));
+                leds[i] = CHSV(random(255 - hueGap, 255) + base * isRainbowGoing,
+                    255 - random(minSaturation, maxSaturation), random(minBrightness, maxBrightness));
                 free--;
             }
         }
@@ -189,19 +192,19 @@ class Party : public Mode {
     byte maxSaturation = 255;
     byte minBrightness = 70;
     byte maxBrightness = 255;
-    bool isRainbowGoing = false;
+    bool isRainbowGoing = true;
     byte baseStep = 1;
-    byte minHue = 0;
-    byte maxHue = 255;
+    byte hueGap = 10;
 };
 
-const long NUM_LEDS = 11;
+const long NUM_LEDS = 61;
 #define PIN 12
 #define FREE_PIN 34
 
 CRGB leds[NUM_LEDS];
 Mode* modes[2];
 byte mode = 1;
+uint32_t modeTimer = 0;
 String receive;
 
 bool isActive = true;
@@ -220,7 +223,7 @@ void setup() {
 
 void loop() {
     if (isActive)
-        modes[mode]->show(leds, &NUM_LEDS);
+        modes[mode]->show(leds, &NUM_LEDS, &modeTimer);
     delay(1);
 
     // получение с Serial порта всего необходимого
