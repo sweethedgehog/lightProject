@@ -221,32 +221,34 @@ public:
                 isCircle = parameters.toInt() / 100;
                 break;
             case 5:
+                yScale = parameters.toInt() / 100; // тысячные
+            case 6:
                 hueScale = parameters.toInt() / 100;
                 break;
-            case 6:
+            case 7:
                 hueOffset = parameters.toInt() / 100;
                 break;
-            case 7:
+            case 8:
                 saturation = parameters.toInt() / 100;
                 break;
-            case 8:
+            case 9:
                 isRunningLight = parameters.toInt() / 100;
                 break;
-            case 9:
+            case 10:
                 gap = parameters.toInt() / 100;
                 break;
-            case 10:
+            case 11:
                 tailSize = parameters.toInt() / 100;
                 break;
-            case 11:
+            case 12:
                 direction = parameters.toInt() / 100;
                 break;
         }
     }
     void calculate(CRGB *leds, const long *ledCount) override {
         for (long i = 0; i < *ledCount; i++) {
-            leds[i] = CHSV(perlinNoise(i, float(gridWidth) / *ledCount) * hueScale + hueScale + hueOffset,
-                255 - saturation, !isRunningLight ? 255 : i <= *ledCount / 2 ?
+            leds[i] = CHSV((perlinNoise(i, float(gridWidth) / *ledCount, float(yScale) / 1000) + 1)
+                * hueScale + hueOffset,255 - saturation, !isRunningLight ? 255 : i <= *ledCount / 2 ?
                 calculateRunLight(i, gap, tailSize, direction, &run, runLightDelay, &moveCounter) :
                 calculateRunLight(*ledCount - i, gap, 3, direction, &run, runLightDelay, &moveCounter));
         }
@@ -259,7 +261,7 @@ private:
     float qunticCurve(float t) {
         return t * t * t * (t * (t * 6 - 15) + 10);
     }
-    float perlinNoise(int x, float gridScale) {
+    float perlinNoise(int x, float xScale, float yScale) {
         struct Vector2 {
             float x, y;
             Vector2(float x, float y) : x(x), y(y) {}
@@ -269,25 +271,25 @@ private:
             }
             float operator*(Vector2 a) {return a.x * x + a.y * y;}
         };
-        return lerp(lerp(Vector2(float(x) * gridScale - floor(float(x) * gridScale),
-                                 float(y) * gridScale - floor(float(y) * gridScale)) * Vector2(
-                             seed + floor(float(x) * gridScale) + floor(float(y) * gridScale) * gridWidth),
-                         Vector2(float(x) * gridScale - floor(float(x) * gridScale) - 1,
-                                 float(y) * gridScale - floor(float(y) * gridScale))
-                         * Vector2(seed + (isCircle ? int(floor(float(x) * gridScale) + 1) % gridWidth
-                            : int(floor(float(x) * gridScale) + 1))
-                             + floor(float(y) * gridScale) * gridWidth),
-                         qunticCurve(float(x) * gridScale - floor(float(x) * gridScale))), lerp(
-                        Vector2(float(x) * gridScale - floor(float(x) * gridScale),
-                                float(y) * gridScale - floor(float(y) * gridScale) - 1) * Vector2(
-                            seed + floor(float(x) * gridScale) + (floor(float(y) * gridScale) + 1) * gridWidth),
-                        Vector2(float(x) * gridScale - floor(float(x) * gridScale) - 1,
-                                float(y) * gridScale - floor(float(y) * gridScale) - 1) * Vector2(
-                                seed + (isCircle ? int(floor(float(x) * gridScale) + 1) % gridWidth
-                                    : int(floor(float(x) * gridScale) + 1)) +
-                            (floor(float(y) * gridScale) + 1) * gridWidth),
-                        qunticCurve(float(x) * gridScale - floor(float(x) * gridScale))),
-                    qunticCurve(float(y) * gridScale - floor(float(y) * gridScale)));
+        return lerp(lerp(Vector2(float(x) * xScale - floor(float(x) * xScale),
+                                 float(y) * yScale - floor(float(y) * yScale)) * Vector2(
+                             seed + floor(float(x) * xScale) + floor(float(y) * yScale) * gridWidth),
+                         Vector2(float(x) * xScale - floor(float(x) * xScale) - 1,
+                                 float(y) * yScale - floor(float(y) * yScale))
+                         * Vector2(seed + (isCircle ? int(floor(float(x) * xScale) + 1) % gridWidth
+                            : int(floor(float(x) * xScale) + 1))
+                             + floor(float(y) * yScale) * gridWidth),
+                         qunticCurve(float(x) * xScale - floor(float(x) * xScale))), lerp(
+                        Vector2(float(x) * xScale - floor(float(x) * xScale),
+                                float(y) * yScale - floor(float(y) * yScale) - 1) * Vector2(
+                            seed + floor(float(x) * xScale) + (floor(float(y) * yScale) + 1) * gridWidth),
+                        Vector2(float(x) * xScale - floor(float(x) * xScale) - 1,
+                                float(y) * yScale - floor(float(y) * yScale) - 1) * Vector2(
+                                seed + (isCircle ? int(floor(float(x) * xScale) + 1) % gridWidth
+                                    : int(floor(float(x) * xScale) + 1)) +
+                            (floor(float(y) * yScale) + 1) * gridWidth),
+                        qunticCurve(float(x) * xScale - floor(float(x) * xScale))),
+                    qunticCurve(float(y) * yScale - floor(float(y) * yScale)));
     }
 
     uint32_t seed;
@@ -298,8 +300,9 @@ private:
     byte runLightDelay;
     byte gridWidth = 2;
     bool isCircle = true;
+    byte yScale = 7; // тысячные
     byte hueScale = 230;
-    byte hueOffset = 127;
+    byte hueOffset = 0;
     byte saturation = 0;
     bool isRunningLight = false;
     byte gap = 5;
@@ -361,7 +364,7 @@ const long NUM_LEDS = 61;
 
 CRGB leds[NUM_LEDS];
 Mode *mode;
-byte currMode = 3;
+byte currMode = 2;
 uint32_t modeTimer = 0;
 String receive;
 
@@ -383,7 +386,7 @@ void setup() {
             mode = new Party(25);
             break;
         case 2:
-            mode = new PerlinShow(50, 100);
+            mode = new PerlinShow(20, 80);
             break;
         case 3:
             mode = new IridescentLights(20, 80, &NUM_LEDS, leds);
