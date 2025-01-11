@@ -2,9 +2,9 @@
 #include "FastLED/src/FastLED.h"
 
 class Mode {
-    public:
+public:
     Mode() {}
-    virtual void setParam(String& parameters) {
+    virtual void setParam(String &parameters) {
         switch (int(parameters.toInt()) % 100) {
             case 1:
                 brightness = parameters.toInt() / 100;
@@ -15,54 +15,62 @@ class Mode {
         }
     }
     // для режимов, у которых должно быть начало (прописывается в самом режиме)
-    virtual void startMode(){}
+    virtual void startMode() {}
     // логика светодиодов (прописывается отдельно в каждом классе)
-    virtual void calculate(CRGB* leds, const long* ledCount) {}
+    virtual void calculate(CRGB *leds, const long *ledCount) {}
     // основная логика таймера и вызов функции calculate
-    void show(CRGB* leds, const long* ledCount, uint32_t* timer) {
+    void show(CRGB *leds, const long *ledCount, uint32_t *timer) {
         if (millis() - *timer > float(delayTime) / speed * 100) {
+            // debugTimer = millis(); // таймер для замера выполнения режима
             *timer = millis();
             calculate(leds, ledCount);
             FastLED.setBrightness(brightness);
             FastLED.show();
+            // Serial.println("time: " + String(millis() - debugTimer)); // вывод таймера для замера выполнения режима
         }
     }
-    // рассчитывает яркость светодиода для бегущего огонька (в HSV это 3-ий параметр)
-    byte calculateRunLight(long* i, byte gap, byte tailSize, bool direction,
-        byte* run, uint16_t delayRunTime, byte* moveCounter) {
-        if (/*uint32_t(millis() / int(float(delayTime) / speed * 100)) % (delayRunTime / delayTime) == 0*/
-            *moveCounter >= delayRunTime / delayTime + bool(delayRunTime % delayTime) && *i == 0) {
-            *moveCounter = 0;
-            (*run)++;
-            if (*run > gap)
-                *run = 0;
-        }
-        else
-            (*moveCounter)++;
-        return direction ? max(0, 255 - max((int(*i) + *run) % (gap + 1), 0) * 255 / (tailSize + 1)) :
-            max(0, 255 - max(gap - (gap + int(*i) - *run) % (gap + 1), 0) * 255 / (tailSize + 1));
-    }
-    // рассчитывает оттенок для режимов, изпользующих радугу
-    byte calculateRainbow(long i, byte* base, byte rainbowCount, const long* ledCount, bool twoSides) {
+private:
+    //******************************
+    // unsigned long debugTimer = 0;
+    //******************************
+    /// настраиваемые параметры
+    byte speed = 100;
+    byte brightness = 50;
+protected:
+    // рассчитывает оттенок для режимов, использующих радугу
+    byte calculateRainbow(long i, byte *base, byte rainbowCount, const long *ledCount, bool twoSides) {
         if (i == 0)
             (*base)++;
         return *base + i * (rainbowCount * 255 / *ledCount) * (twoSides + 1);
     }
+    // рассчитывает яркость светодиода для бегущего огонька (в HSV это 3-й параметр)
+    byte calculateRunLight(long i, byte gap, byte tailSize, bool direction,
+        byte* run, uint16_t delayRunTime, byte* moveCounter) {
+        if (i == 0) {
+            if (/*uint32_t(millis() / int(float(delayTime) / speed * 100)) % (delayRunTime / delayTime) == 0*/
+                *moveCounter >= delayRunTime / delayTime + bool(delayRunTime % delayTime) - 1) {
+                *moveCounter = 0;
+                (*run)++;
+                if (*run > gap)
+                    *run = 0;
+                }
+            else
+                (*moveCounter)++;
+        }
+        return direction ? max(0, 255 - max((int(i) + *run) % (gap + 1), 0) * 255 / (tailSize + 1)) :
+            max(0, 255 - max(gap - (gap + int(i) - *run) % (gap + 1), 0) * 255 / (tailSize + 1));
+    }
 
-    private:
-    /// настраиваемые параметры
-    byte speed = 100;
-    byte brightness = 50;
-    protected:
     byte delayTime;
 };
 
 class SingleColor : public Mode {
-    public: SingleColor(int delayTime, int delayRunLightTime) {
+public:
+    SingleColor(byte delayTime, byte delayRunLightTime) {
         this->delayTime = delayTime;
         this->runLightDelay = delayRunLightTime;
     }
-    void setParam(String& parameters) override {
+    void setParam(String &parameters) override {
         Mode::setParam(parameters);
         switch (int(parameters.toInt() % 100)) {
             case 3:
@@ -97,25 +105,25 @@ class SingleColor : public Mode {
                 break;
         }
     }
-    void calculate(CRGB* leds, const long* ledCount) override {
+    void calculate(CRGB *leds, const long *ledCount) override {
         for (long i = 0; i < *ledCount / (twoSides + 1) + twoSides * (*ledCount % 2); i++) {
-            byte brightnessForLed = calculateRunLight(&i, gap, tailSize, direction, &run, runLightDelay, &moveCounter);
+            byte brightnessForLed = calculateRunLight(i, gap, tailSize, direction, &run, runLightDelay, &moveCounter);
             byte rainbowHue = calculateRainbow(i, &base, rainbowCount, ledCount, twoSides);
             leds[direction ? i : *ledCount / (twoSides + 1) - i - 1 + twoSides] =
-                CHSV(isRainbow ? rainbowHue : hue,
-                    255 - saturation, isRunningLight ? float(brightnessForLed) / 255 * value : value);
+                    CHSV(isRainbow ? rainbowHue : hue,
+                         255 - saturation, isRunningLight ? float(brightnessForLed) / 255 * value : value);
             if (twoSides)
                 leds[direction ? *ledCount - i - 1 : i + *ledCount / 2] =
-                    CHSV(isRainbow ? rainbowHue : hue,
-                        255 - saturation, isRunningLight ? float(brightnessForLed) / 255 * value : value);
+                        CHSV(isRainbow ? rainbowHue : hue,
+                             255 - saturation, isRunningLight ? float(brightnessForLed) / 255 * value : value);
         }
     }
-    private:
+private:
     byte run = 0;
     byte moveCounter = 0;
     byte base = 0;
-    // настраиваемые параметры
-    uint16_t runLightDelay;
+    /// настраиваемые параметры
+    byte runLightDelay;
     byte hue = 0, saturation = 0, value = 255;
     byte gap = 9;
     byte tailSize = 6;
@@ -127,8 +135,8 @@ class SingleColor : public Mode {
 };
 
 class Party : public Mode {
-    public:
-    Party(long delayTime) {
+public:
+    Party(byte delayTime) {
         this->delayTime = delayTime;
     }
     void startMode() override {
@@ -139,34 +147,34 @@ class Party : public Mode {
         switch (int(parameters.toInt() % 100)) {
             case 3:
                 ratio = parameters.toInt() / 100;
-            break;
+                break;
             case 4:
                 descendingStep = parameters.toInt() / 100;
-            break;
+                break;
             case 5:
                 minSaturation = parameters.toInt() / 100;
-            break;
+                break;
             case 6:
                 maxSaturation = parameters.toInt() / 100;
-            break;
+                break;
             case 7:
                 minBrightness = parameters.toInt() / 100;
-            break;
+                break;
             case 8:
                 maxBrightness = parameters.toInt() / 100;
-            break;
+                break;
             case 9:
                 isRainbowGoing = bool(parameters.toInt() / 100);
-            break;
+                break;
             case 10:
                 baseStep = parameters.toInt() / 100;
-            break;
+                break;
             case 11:
                 hueGap = parameters.toInt() / 100;
-            break;
+                break;
         }
     }
-    void calculate(CRGB* leds, const long* ledCount) override {
+    void calculate(CRGB *leds, const long *ledCount) override {
         long free = 0;
         for (long i = 0; i < *ledCount; i++) {
             leds[i] -= CHSV(0, 0, descendingStep);
@@ -177,15 +185,15 @@ class Party : public Mode {
             long i = random(0, *ledCount);
             if (rgb2hsv_approximate(leds[i]).raw[2] == 0) {
                 leds[i] = CHSV(random(255 - hueGap, 255) + base * isRainbowGoing,
-                    255 - random(minSaturation, maxSaturation), random(minBrightness, maxBrightness));
+                               255 - random(minSaturation, maxSaturation), random(minBrightness, maxBrightness));
                 free--;
             }
         }
         base += baseStep;
     }
-    private:
+private:
     byte base = 0;
-    // настраиваемые параметры
+    /// настраиваемые параметры
     byte ratio = 2;
     byte descendingStep = 1;
     byte minSaturation = 0;
@@ -197,13 +205,121 @@ class Party : public Mode {
     byte hueGap = 10;
 };
 
+class PerlinShow : public Mode {
+public:
+    PerlinShow(byte delayTime, byte runLightDelay) {
+        this->delayTime = delayTime;
+        this->runLightDelay = runLightDelay;
+    }
+    void startMode() override {
+        seed = random(0, 255);
+    }
+    void setParam(String &parameters) override {
+        Mode::setParam(parameters);
+        switch (int(parameters.toInt() % 100)) {
+            case 3:
+                gridWidth = parameters.toInt() / 100;
+                break;
+            case 4:
+                isCircle = parameters.toInt() / 100;
+                break;
+            case 5:
+                hueScale = parameters.toInt() / 100;
+                break;
+            case 6:
+                hueOffset = parameters.toInt() / 100;
+                break;
+            case 7:
+                saturation = parameters.toInt() / 100;
+                break;
+            case 8:
+                isRunningLight = parameters.toInt() / 100;
+                break;
+            case 9:
+                gap = parameters.toInt() / 100;
+                break;
+            case 10:
+                tailSize = parameters.toInt() / 100;
+                break;
+            case 11:
+                direction = parameters.toInt() / 100;
+                break;
+        }
+    }
+    void calculate(CRGB *leds, const long *ledCount) override {
+        for (long i = 0; i < *ledCount; i++) {
+            leds[i] = CHSV(perlinNoise(i, float(gridWidth) / *ledCount) * hueScale + hueScale + hueOffset,
+                255 - saturation, !isRunningLight ? 255 : i <= *ledCount / 2 ?
+                calculateRunLight(i, gap, tailSize, direction, &run, runLightDelay, &moveCounter) :
+                calculateRunLight(*ledCount - i, gap, 3, direction, &run, runLightDelay, &moveCounter));
+        }
+        y++;
+    }
+private:
+    float lerp(float a, float b, float t) {
+        return a + t * (b - a);
+    }
+    float qunticCurve(float t) {
+        return t * t * t * (t * (t * 6 - 15) + 10);
+    }
+    static int randomIntSeeded(int minValue, int maxValue, uint32_t seed) {
+        return minValue + (seed ^ (214013 * seed + 2531011 >> 15)) % (maxValue - minValue + 1);
+    }
+    float perlinNoise(int x, float gridScale) {
+        struct Vector2 {
+            float x, y;
+            Vector2(float x, float y) : x(x), y(y) {}
+            Vector2(int seed) {
+                x = randomIntSeeded(0, 7, seed) % 3 - 1;
+                y = randomIntSeeded(0, 7, seed) / 3 - 1;
+            }
+            float operator*(Vector2 a) {return a.x * x + a.y * y;}
+        };
+        return lerp(lerp(Vector2(float(x) * gridScale - floor(float(x) * gridScale),
+                                 float(y) * gridScale - floor(float(y) * gridScale)) * Vector2(
+                             seed + floor(float(x) * gridScale) + floor(float(y) * gridScale) * gridWidth),
+                         Vector2(float(x) * gridScale - floor(float(x) * gridScale) - 1,
+                                 float(y) * gridScale - floor(float(y) * gridScale))
+                         * Vector2(seed + (isCircle ? int(floor(float(x) * gridScale) + 1) % gridWidth
+                            : int(floor(float(x) * gridScale) + 1))
+                             + floor(float(y) * gridScale) * gridWidth),
+                         qunticCurve(float(x) * gridScale - floor(float(x) * gridScale))), lerp(
+                        Vector2(float(x) * gridScale - floor(float(x) * gridScale),
+                                float(y) * gridScale - floor(float(y) * gridScale) - 1) * Vector2(
+                            seed + floor(float(x) * gridScale) + (floor(float(y) * gridScale) + 1) * gridWidth),
+                        Vector2(float(x) * gridScale - floor(float(x) * gridScale) - 1,
+                                float(y) * gridScale - floor(float(y) * gridScale) - 1) * Vector2(
+                                seed + (isCircle ? int(floor(float(x) * gridScale) + 1) % gridWidth
+                                    : int(floor(float(x) * gridScale) + 1)) +
+                            (floor(float(y) * gridScale) + 1) * gridWidth),
+                        qunticCurve(float(x) * gridScale - floor(float(x) * gridScale))),
+                    qunticCurve(float(y) * gridScale - floor(float(y) * gridScale)));
+    }
+
+    byte seed;
+    uint32_t y = 0;
+    byte run = 0;
+    byte moveCounter = 0;
+    /// настраиваемые параметры
+    byte runLightDelay;
+    byte gridWidth = 2;
+    bool isCircle = true;
+    byte hueScale = 230;
+    byte hueOffset = 127;
+    byte saturation = 127;
+    bool isRunningLight = false;
+    byte gap = 5;
+    byte tailSize = 3;
+    bool direction = false;
+};
+
 const long NUM_LEDS = 61;
 #define PIN 12
 #define FREE_PIN 34
 
 CRGB leds[NUM_LEDS];
-Mode* modes[2];
-byte mode = 1;
+Mode *mode;
+byte currMode = 2;
 uint32_t modeTimer = 0;
 String receive;
 
@@ -217,13 +333,23 @@ void setup() {
     randomSeed(analogRead(FREE_PIN));
 
     FastLED.addLeds<WS2812, PIN, GRB>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
-    modes[0] = new SingleColor(20, 80);
-    modes[1] = new Party(25);
+    switch (currMode) {
+        case 0:
+            mode = new SingleColor(20, 80);
+            break;
+        case 1:
+            mode = new Party(25);
+            break;
+        case 2:
+            mode = new PerlinShow(50, 100);
+            break;
+    }
+    mode->startMode();
 }
 
 void loop() {
     if (isActive)
-        modes[mode]->show(leds, &NUM_LEDS, &modeTimer);
+        mode->show(leds, &NUM_LEDS, &modeTimer);
     delay(1);
 
     // получение с Serial порта всего необходимого
@@ -232,7 +358,7 @@ void loop() {
         if (receive[receive.length() - 1] == '\n') {
             if (receive[0] == 'p')
                 isActive = !isActive;
-            modes[mode]->setParam(receive);
+            mode->setParam(receive);
             Serial.print(receive);
 
             receive = "";
