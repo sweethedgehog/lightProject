@@ -14,8 +14,6 @@ public:
                 break;
         }
     }
-    // для режимов, у которых должно быть начало (прописывается в самом режиме)
-    virtual void startMode() {}
     // логика светодиодов (прописывается отдельно в каждом классе)
     virtual void calculate(CRGB *leds, const long *ledCount) {}
     // основная логика таймера и вызов функции calculate
@@ -59,6 +57,9 @@ protected:
         }
         return direction ? max(0, 255 - max((int(i) + *run) % (gap + 1), 0) * 255 / (tailSize + 1)) :
             max(0, 255 - max(gap - (gap + int(i) - *run) % (gap + 1), 0) * 255 / (tailSize + 1));
+    }
+    static long randomIntSeeded(int minValue, int maxValue, uint32_t seed) {
+        return minValue + (seed ^ (214013 * seed + 2531011 >> 15)) % (maxValue - minValue + 1);
     }
 
     byte delayTime;
@@ -138,8 +139,6 @@ class Party : public Mode {
 public:
     Party(byte delayTime) {
         this->delayTime = delayTime;
-    }
-    void startMode() override {
         FastLED.clear();
     }
     void setParam(String &parameters) {
@@ -184,7 +183,7 @@ public:
         while (free - *ledCount / ratio > 0) {
             long i = random(0, *ledCount);
             if (rgb2hsv_approximate(leds[i]).raw[2] == 0) {
-                leds[i] = CHSV(random(255 - hueGap, 255) + base * isRainbowGoing,
+                leds[i] = CHSV(random(255 - hueGap, 256) + base * isRainbowGoing,
                                255 - random(minSaturation, maxSaturation), random(minBrightness, maxBrightness));
                 free--;
             }
@@ -210,9 +209,7 @@ public:
     PerlinShow(byte delayTime, byte runLightDelay) {
         this->delayTime = delayTime;
         this->runLightDelay = runLightDelay;
-    }
-    void startMode() override {
-        seed = random(0, 255);
+        seed = random(4294967295);
     }
     void setParam(String &parameters) override {
         Mode::setParam(parameters);
@@ -262,9 +259,6 @@ private:
     float qunticCurve(float t) {
         return t * t * t * (t * (t * 6 - 15) + 10);
     }
-    static int randomIntSeeded(int minValue, int maxValue, uint32_t seed) {
-        return minValue + (seed ^ (214013 * seed + 2531011 >> 15)) % (maxValue - minValue + 1);
-    }
     float perlinNoise(int x, float gridScale) {
         struct Vector2 {
             float x, y;
@@ -296,7 +290,7 @@ private:
                     qunticCurve(float(y) * gridScale - floor(float(y) * gridScale)));
     }
 
-    byte seed;
+    uint32_t seed;
     uint32_t y = 0;
     byte run = 0;
     byte moveCounter = 0;
@@ -306,11 +300,59 @@ private:
     bool isCircle = true;
     byte hueScale = 230;
     byte hueOffset = 127;
-    byte saturation = 127;
+    byte saturation = 0;
     bool isRunningLight = false;
     byte gap = 5;
     byte tailSize = 3;
     bool direction = false;
+};
+
+class IridescentLights : public Mode {
+    public:
+    IridescentLights(byte delayTime, byte runLightDelay, const long *ledsCount, CRGB *leds) {
+        this->delayTime = delayTime;
+        this->runLightDelay = runLightDelay;
+        step = random(4294967295);
+        for (long i = 0; i < *ledsCount; i++) {
+            leds[i] = CHSV(random(256), 255 - saturation, 255);
+        }
+        target = randomIntSeeded(0, maxCount, step);
+    }
+    void setParam(String &parameters) override {
+        Mode::setParam(parameters);
+        switch (int(parameters.toInt() % 100)) {
+            case 3:
+                saturation = parameters.toInt() / 100;
+                break;
+            case 4:
+                minCount = parameters.toInt() / 100;
+                break;
+            case 5:
+                maxCount = parameters.toInt() / 100;
+                break;
+        }
+    }
+    void calculate(CRGB *leds, const long *ledsCount) override {
+        for (long i = 0; i < *ledsCount; i++) {
+            if (count == target) {
+                count = 0;
+                step += *ledsCount;
+                target = randomIntSeeded(minCount, maxCount, step);
+            }
+            leds[i] = CHSV((randomIntSeeded(0, 1, i + step) * 2 - 1) * 3 +
+                rgb2hsv_approximate(leds[i])[0],255 - saturation, 255);
+        }
+        count++;
+    }
+    private:
+    byte target;
+    uint32_t step = 0;
+    byte count = 0;
+    /// настраиваемые параметры
+    byte runLightDelay;
+    byte saturation = 0;
+    byte maxCount = 255;
+    byte minCount = 1;
 };
 
 const long NUM_LEDS = 61;
@@ -319,7 +361,7 @@ const long NUM_LEDS = 61;
 
 CRGB leds[NUM_LEDS];
 Mode *mode;
-byte currMode = 2;
+byte currMode = 3;
 uint32_t modeTimer = 0;
 String receive;
 
@@ -343,8 +385,10 @@ void setup() {
         case 2:
             mode = new PerlinShow(50, 100);
             break;
+        case 3:
+            mode = new IridescentLights(20, 80, &NUM_LEDS, leds);
+            break;
     }
-    mode->startMode();
 }
 
 void loop() {
