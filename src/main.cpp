@@ -58,8 +58,8 @@ protected:
         return direction ? max(0, 255 - max((int(i) + *run) % (gap + 1), 0) * 255 / (tailSize + 1)) :
             max(0, 255 - max(gap - (gap + int(i) - *run) % (gap + 1), 0) * 255 / (tailSize + 1));
     }
-    static long randomIntSeeded(int minValue, int maxValue, uint32_t seed) {
-        return minValue + (seed ^ (214013 * seed + 2531011 >> 15)) % (maxValue - minValue + 1);
+    static long randomIntSeeded(long minValue, long maxValue, uint32_t seed, byte a = 0, byte b = 0) {
+        return minValue + (seed ^ ((214013 - a) * seed + (2531011 - b) >> 15)) % (maxValue - minValue + 1);
     }
 
     byte delayTime;
@@ -210,6 +210,8 @@ public:
         this->delayTime = delayTime;
         this->runLightDelay = runLightDelay;
         seed = random(4294967295);
+        randParamA = random(256);
+        randParamB = random(256);
     }
     void setParam(String &parameters) override {
         Mode::setParam(parameters);
@@ -265,34 +267,35 @@ private:
         struct Vector2 {
             float x, y;
             Vector2(float x, float y) : x(x), y(y) {}
-            Vector2(int seed) {
-                x = randomIntSeeded(0, 7, seed) % 3 - 1;
-                y = randomIntSeeded(0, 7, seed) / 3 - 1;
+            Vector2(long seed, byte randA, byte randB) {
+                x = randomIntSeeded(0, 7, seed, randA, randB) % 3 - 1;
+                y = randomIntSeeded(0, 7, seed, randA, randB) / 3 - 1;
+                if (x == 0 && y == 0) {x = 1; y = 1;}
             }
             float operator*(Vector2 a) {return a.x * x + a.y * y;}
         };
         return lerp(lerp(Vector2(float(x) * xScale - floor(float(x) * xScale),
                                  float(y) * yScale - floor(float(y) * yScale)) * Vector2(
-                             seed + floor(float(x) * xScale) + floor(float(y) * yScale) * gridWidth),
-                         Vector2(float(x) * xScale - floor(float(x) * xScale) - 1,
+                             seed + floor(float(x) * xScale) + floor(float(y) * yScale) * gridWidth,
+                             randParamA, randParamB), Vector2(float(x) * xScale - floor(float(x) * xScale) - 1,
                                  float(y) * yScale - floor(float(y) * yScale))
                          * Vector2(seed + (isCircle ? int(floor(float(x) * xScale) + 1) % gridWidth
-                            : int(floor(float(x) * xScale) + 1))
-                             + floor(float(y) * yScale) * gridWidth),
-                         qunticCurve(float(x) * xScale - floor(float(x) * xScale))), lerp(
+                            : int(floor(float(x) * xScale) + 1)) + floor(float(y) * yScale) * gridWidth, randParamA,
+                            randParamB), qunticCurve(float(x) * xScale - floor(float(x) * xScale))), lerp(
                         Vector2(float(x) * xScale - floor(float(x) * xScale),
                                 float(y) * yScale - floor(float(y) * yScale) - 1) * Vector2(
-                            seed + floor(float(x) * xScale) + (floor(float(y) * yScale) + 1) * gridWidth),
-                        Vector2(float(x) * xScale - floor(float(x) * xScale) - 1,
+                            seed + floor(float(x) * xScale) + (floor(float(y) * yScale) + 1) * gridWidth,
+                            randParamA, randParamB), Vector2(float(x) * xScale - floor(float(x) * xScale) - 1,
                                 float(y) * yScale - floor(float(y) * yScale) - 1) * Vector2(
                                 seed + (isCircle ? int(floor(float(x) * xScale) + 1) % gridWidth
-                                    : int(floor(float(x) * xScale) + 1)) +
-                            (floor(float(y) * yScale) + 1) * gridWidth),
-                        qunticCurve(float(x) * xScale - floor(float(x) * xScale))),
+                                    : int(floor(float(x) * xScale) + 1)) + (floor(float(y) * yScale) + 1) * gridWidth,
+                                    randParamA, randParamB), qunticCurve(float(x) * xScale - floor(float(x) * xScale))),
                     qunticCurve(float(y) * yScale - floor(float(y) * yScale)));
     }
 
     uint32_t seed;
+    byte randParamA;
+    byte randParamB;
     uint32_t y = 0;
     byte run = 0;
     byte moveCounter = 0;
