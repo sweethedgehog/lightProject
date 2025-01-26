@@ -4,33 +4,41 @@
 class Mode {
 public:
     Mode() {}
-    virtual void setParam(String &parameters) {
-        switch (int(parameters.toInt()) % 100) {
+    // установление отдельного параметра
+    virtual void setParam(byte paramNumber, byte parameter) {
+        switch (paramNumber) {
             case 1:
-                brightness = parameters.toInt() / 100;
+                brightness = parameter;
                 break;
             case 2:
-                speed = parameters.toInt() / 100;
+                speed = parameter;
                 break;
         }
+    }
+    // установка сразу всех параметров
+    void setAllParam(byte len, byte* parameters) {
+        for (long i = 0; i < len; i++)
+            setParam(i + 1, parameters[i]);
+    }
+    // получение сразу всех параметров
+    virtual String getAllParameters(String separateSymbol, String endSymbol) {
+        return String(brightness) + separateSymbol + String(speed) + separateSymbol;
     }
     // логика светодиодов (прописывается отдельно в каждом классе)
     virtual void calculate(CRGB *leds, const long *ledCount) {}
     // основная логика таймера и вызов функции calculate
     void show(CRGB *leds, const long *ledCount, uint32_t *timer) {
         if (millis() - *timer > float(delayTime) / speed * 100) {
-            // debugTimer = millis(); // таймер для замера выполнения режима
+            // debugTimer = millis(); // логика таймера для замера времени выполнения
             *timer = millis();
             calculate(leds, ledCount);
             FastLED.setBrightness(brightness);
             FastLED.show();
-            // Serial.println("time: " + String(millis() - debugTimer)); // вывод таймера для замера выполнения режима
+            // Serial.println("time: " + String(millis() - debugTimer)); // вывод таймера для замера времени выполнения
         }
     }
 private:
-    //******************************
-    // unsigned long debugTimer = 0;
-    //******************************
+    // unsigned long debugTimer = 0; // таймер для определения времени выполнения
     /// настраиваемые параметры
     byte speed = 100;
     byte brightness = 50;
@@ -43,7 +51,7 @@ protected:
     }
     // рассчитывает яркость светодиода для бегущего огонька (в HSV это 3-й параметр)
     byte calculateRunLight(long i, byte gap, byte tailSize, bool direction,
-        byte* run, uint16_t delayRunTime, byte* moveCounter) {
+        byte* run, uint32_t delayRunTime, byte* moveCounter) {
         if (i == 0) {
             if (/*uint32_t(millis() / int(float(delayTime) / speed * 100)) % (delayRunTime / delayTime) == 0*/
                 *moveCounter >= delayRunTime / delayTime + bool(delayRunTime % delayTime) - 1) {
@@ -58,6 +66,7 @@ protected:
         return direction ? max(0, 255 - max((int(i) + *run) % (gap + 1), 0) * 255 / (tailSize + 1)) :
             max(0, 255 - max(gap - (gap + int(i) - *run) % (gap + 1), 0) * 255 / (tailSize + 1));
     }
+    // генерирует случайное число от minValue до maxValue основываясь на введенном seed
     static long randomIntSeeded(long minValue, long maxValue, uint32_t seed, byte a = 0, byte b = 0) {
         return minValue + (seed ^ ((214013 - a) * seed + (2531011 - b) >> 15)) % (maxValue - minValue + 1);
     }
@@ -71,40 +80,47 @@ public:
         this->delayTime = delayTime;
         this->runLightDelay = delayRunLightTime;
     }
-    void setParam(String &parameters) override {
-        Mode::setParam(parameters);
-        switch (int(parameters.toInt() % 100)) {
+    void setParam(byte numberParameter, byte parameters) override {
+        Mode::setParam(numberParameter, parameters);
+        switch (numberParameter) {
             case 3:
-                hue = parameters.toInt() / 100;
+                hue = parameters;
                 break;
             case 4:
-                saturation = parameters.toInt() / 100;
+                saturation = parameters;
                 break;
             case 5:
-                value = parameters.toInt() / 100;
+                value = parameters;
                 break;
             case 6:
-                gap = parameters.toInt() / 100;
+                gap = parameters;
                 break;
             case 7:
-                tailSize = parameters.toInt() / 100;
+                tailSize = parameters;
                 break;
             case 8:
-                rainbowCount = parameters.toInt() / 100;
+                rainbowCount = parameters;
                 break;
             case 9:
-                twoSides = bool(parameters.toInt() / 100);
+                twoSides = bool(parameters);
                 break;
             case 10:
-                direction = bool(parameters.toInt() / 100);
+                direction = bool(parameters);
                 break;
             case 11:
-                isRunningLight = bool(parameters.toInt() / 100);
+                isRunningLight = bool(parameters);
                 break;
             case 12:
-                isRainbow = bool(parameters.toInt() / 100);
+                isRainbow = bool(parameters);
                 break;
         }
+    }
+    String getAllParameters(String separateSymbol, String endSymbol) override {
+        return Mode::getAllParameters(separateSymbol, endSymbol) + String(hue) + separateSymbol +
+            String(saturation) + separateSymbol + String(value) + separateSymbol + String(gap) + separateSymbol +
+                String(tailSize) + separateSymbol + String(rainbowCount) + separateSymbol + String(int(twoSides)) +
+                    separateSymbol + String(int(direction)) + separateSymbol + String(int(isRunningLight)) +
+                        separateSymbol + String(int(isRainbow)) + endSymbol;
     }
     void calculate(CRGB *leds, const long *ledCount) override {
         for (long i = 0; i < *ledCount / (twoSides + 1) + twoSides * (*ledCount % 2); i++) {
@@ -141,37 +157,44 @@ public:
         this->delayTime = delayTime;
         FastLED.clear();
     }
-    void setParam(String &parameters) {
-        Mode::setParam(parameters);
-        switch (int(parameters.toInt() % 100)) {
+    void setParam(byte numberParameter, byte parameters) override {
+        Mode::setParam(numberParameter, parameters);
+        switch (numberParameter) {
             case 3:
-                ratio = parameters.toInt() / 100;
+                ratio = parameters;
                 break;
             case 4:
-                descendingStep = parameters.toInt() / 100;
+                descendingStep = parameters;
                 break;
             case 5:
-                minSaturation = parameters.toInt() / 100;
+                minSaturation = parameters;
                 break;
             case 6:
-                maxSaturation = parameters.toInt() / 100;
+                maxSaturation = parameters;
                 break;
             case 7:
-                minBrightness = parameters.toInt() / 100;
+                minBrightness = parameters;
                 break;
             case 8:
-                maxBrightness = parameters.toInt() / 100;
+                maxBrightness = parameters;
                 break;
             case 9:
-                isRainbowGoing = bool(parameters.toInt() / 100);
+                isRainbowGoing = bool(parameters);
                 break;
             case 10:
-                baseStep = parameters.toInt() / 100;
+                baseStep = parameters;
                 break;
             case 11:
-                hueGap = parameters.toInt() / 100;
+                hueGap = parameters;
                 break;
         }
+    }
+    String getAllParameters(String separateSymbol, String endSymbol) override {
+        return Mode::getAllParameters(separateSymbol, endSymbol) + String(ratio) + separateSymbol +
+            String(descendingStep) + separateSymbol + String(minSaturation) + separateSymbol + String(maxSaturation) +
+                separateSymbol + String(minBrightness) + separateSymbol + String(maxBrightness) + separateSymbol +
+                    String(int(isRainbowGoing)) + separateSymbol + String(baseStep) + separateSymbol + String(hueGap) +
+                        endSymbol;
     }
     void calculate(CRGB *leds, const long *ledCount) override {
         long free = 0;
@@ -180,8 +203,8 @@ public:
             if (rgb2hsv_approximate(leds[i]).raw[2] == 0)
                 free++;
         }
-        while (free - *ledCount / ratio > 0) {
-            long i = random(0, *ledCount);
+        while (free > *ledCount - *ledCount / ratio) {
+            long i = random(*ledCount);
             if (rgb2hsv_approximate(leds[i]).raw[2] == 0) {
                 leds[i] = CHSV(random(255 - hueGap, 256) + base * isRainbowGoing,
                                255 - random(minSaturation, maxSaturation), random(minBrightness, maxBrightness));
@@ -213,39 +236,46 @@ public:
         randParamA = random(256);
         randParamB = random(256);
     }
-    void setParam(String &parameters) override {
-        Mode::setParam(parameters);
-        switch (int(parameters.toInt() % 100)) {
+    void setParam(byte numberParameter, byte parameters) override {
+        Mode::setParam(numberParameter, parameters);
+        switch (numberParameter) {
             case 3:
-                gridWidth = parameters.toInt() / 100;
+                gridWidth = parameters;
                 break;
             case 4:
-                isCircle = parameters.toInt() / 100;
+                isCircle = parameters;
                 break;
             case 5:
-                yScale = parameters.toInt() / 100; // тысячные
+                yScale = parameters; // тысячные
             case 6:
-                hueScale = parameters.toInt() / 100;
+                hueScale = parameters;
                 break;
             case 7:
-                hueOffset = parameters.toInt() / 100;
+                hueOffset = parameters;
                 break;
             case 8:
-                saturation = parameters.toInt() / 100;
+                saturation = parameters;
                 break;
             case 9:
-                isRunningLight = parameters.toInt() / 100;
+                isRunningLight = parameters;
                 break;
             case 10:
-                gap = parameters.toInt() / 100;
+                gap = parameters;
                 break;
             case 11:
-                tailSize = parameters.toInt() / 100;
+                tailSize = parameters;
                 break;
             case 12:
-                direction = parameters.toInt() / 100;
+                direction = parameters;
                 break;
         }
+    }
+    String getAllParameters(String separateSymbol, String endSymbol) override {
+        return Mode::getAllParameters(separateSymbol, endSymbol) + String(gridWidth) + separateSymbol +
+            String(int(isCircle)) + separateSymbol + String(yScale) + separateSymbol + String(hueScale) +
+                separateSymbol + String(hueOffset) + separateSymbol + String(saturation) + separateSymbol +
+                    String(int(isRunningLight)) + separateSymbol + String(gap) + separateSymbol + String(tailSize) +
+                        separateSymbol + String(int(direction)) + endSymbol;
     }
     void calculate(CRGB *leds, const long *ledCount) override {
         for (long i = 0; i < *ledCount; i++) {
@@ -324,19 +354,23 @@ class IridescentLights : public Mode {
         }
         target = randomIntSeeded(0, maxCount, step);
     }
-    void setParam(String &parameters) override {
-        Mode::setParam(parameters);
-        switch (int(parameters.toInt() % 100)) {
+    void setParam(byte numberParameter, byte parameters) override {
+        Mode::setParam(numberParameter, parameters);
+        switch (numberParameter) {
             case 3:
-                saturation = parameters.toInt() / 100;
+                saturation = parameters;
                 break;
             case 4:
-                minCount = parameters.toInt() / 100;
+                minCount = parameters;
                 break;
             case 5:
-                maxCount = parameters.toInt() / 100;
+                maxCount = parameters;
                 break;
         }
+    }
+    String getAllParameters(String separateSymbol, String endSymbol) override {
+        return Mode::getAllParameters(separateSymbol, endSymbol) + String(saturation) +
+            separateSymbol + String(maxCount) + separateSymbol + String(minCount) + endSymbol;
     }
     void calculate(CRGB *leds, const long *ledsCount) override {
         for (long i = 0; i < *ledsCount; i++) {
@@ -366,12 +400,30 @@ const long NUM_LEDS = 61;
 #define FREE_PIN 34
 
 CRGB leds[NUM_LEDS];
-Mode *mode;
-byte currMode = 2;
+Mode *mode = nullptr;
 uint32_t modeTimer = 0;
 String receive;
 
 bool isActive = true;
+
+void setNewMode(byte modeNumber) {
+    if (mode != nullptr)
+        delete mode;
+    switch (modeNumber) {
+        case 0:
+            mode = new SingleColor(20, 80);
+        break;
+        case 1:
+            mode = new Party(25);
+        break;
+        case 2:
+            mode = new PerlinShow(20, 80);
+        break;
+        case 3:
+            mode = new IridescentLights(20, 80, &NUM_LEDS, leds);
+        break;
+    }
+}
 
 void setup() {
     Serial.begin(115200);
@@ -381,20 +433,8 @@ void setup() {
     randomSeed(analogRead(FREE_PIN));
 
     FastLED.addLeds<WS2812, PIN, GRB>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
-    switch (currMode) {
-        case 0:
-            mode = new SingleColor(20, 80);
-            break;
-        case 1:
-            mode = new Party(25);
-            break;
-        case 2:
-            mode = new PerlinShow(20, 80);
-            break;
-        case 3:
-            mode = new IridescentLights(20, 80, &NUM_LEDS, leds);
-            break;
-    }
+
+    setNewMode(2);
 }
 
 void loop() {
@@ -402,15 +442,21 @@ void loop() {
         mode->show(leds, &NUM_LEDS, &modeTimer);
     delay(1);
 
-    // получение с Serial порта всего необходимого
+    // работа с Serial портом
     if (Serial.available()) {
         receive += Serial.readString();
         if (receive[receive.length() - 1] == '\n') {
-            if (receive[0] == 'p')
+            char receivedChar[receive.length() - 1];
+            receive.toCharArray(receivedChar, receive.length());
+            if (receivedChar[0] == 'p')
                 isActive = !isActive;
-            mode->setParam(receive);
-            Serial.print(receive);
-
+            else if (receivedChar[0] == 'g')
+                Serial.println(mode->getAllParameters(";", "."));
+            else if (receivedChar[0] == 'm')
+                setNewMode(int(receive[1]) - '0');
+            else if (receivedChar[0] == 's')
+                mode->setParam(byte(receivedChar[1]) - 'a' + 1, String(receivedChar + 2).toInt());
+            Serial.println(String(receivedChar));
             receive = "";
         }
     }
