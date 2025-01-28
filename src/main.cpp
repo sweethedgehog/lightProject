@@ -432,6 +432,8 @@ class IridescentLights : public Mode {
     byte minCount = 1;
 };
 
+#define version "0.0"
+
 const long NUM_LEDS = 61;
 #define LED_PIN 12
 #define FREE_PIN 34
@@ -442,6 +444,7 @@ Mode *mode = nullptr;
 byte currMode = 2;
 uint32_t modeTimer = 0;
 String receive;
+bool isConnected = false;
 
 bool isActive = true;
 
@@ -481,12 +484,119 @@ String convertRawToSimple(String raw, char separateSymbol, char endSymbol) {
     }
     return result + endSymbol;
 }
+void serialHandler(String receive) {
+    char receivedChar[receive.length() - 1];
+    receive.toCharArray(receivedChar, receive.length() - 1);
+    if (receivedChar[0] == 'b') {
+        isActive = !isActive;
+        Serial.println("Pause!");
+    }
+    else if (receivedChar[0] == 'g') {
+        Serial.println("Parameters!");
+        Serial.println(convertRawToSimple(mode->getAllParameters(), ';', '.'));
+        if (NuSerial.isConnected()) {
+            NuSerial.println("Parameters!");
+            NuSerial.println(mode->getAllParameters());
+            NuSerial.println(convertRawToSimple(mode->getAllParameters(), ';', '.'));
+        }
+    }
+    else if (receivedChar[0] == 'm') {
+        setNewMode(byte(receive[1]) - '0');
+        currMode = byte(receive[1]) - '0';
+        File setMode = SD.open("/current_mode.txt", FILE_WRITE);
+        setMode.print(char(currMode));
+        setMode.close();
+    }
+    else if (receivedChar[0] == 's') {
+        mode->setParam(byte(receivedChar[1]) - 'a' + 1, String(receivedChar + 2).toInt());
+        File setSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_READ);
+        String currProfile = setSettings.readString();
+        setSettings.close();
+        setSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/profile_"
+            + String(currProfile) + ".txt", FILE_WRITE);
+        setSettings.print(mode->getAllParameters());
+        setSettings.close();
+    }
+    else if (receivedChar[0] == 'p') {
+        File profileSettings;
+        if (receivedChar[1] == 's') {
+            if (SD.exists("/mode_settings/mode_" + String(currMode) + "/profile_" + String(receivedChar + 2) + ".txt")) {
+                profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
+                profileSettings.print(receivedChar + 2);
+                profileSettings.close();
+                setNewMode(currMode);
+                Serial.println("Profile set to \"" + String(receivedChar + 2) + "\"!");
+            }
+            else {
+                Serial.println("Profile \"" + String(receivedChar + 2) + "\" does not exist!");
+            }
+        }
+        else if (receivedChar[1] == 'n') {
+            profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/profile_" +
+                String(receivedChar + 2) + ".txt", FILE_WRITE);
+            profileSettings.print(mode->getAllParameters());
+            profileSettings.close();
+            profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
+            profileSettings.print(receivedChar + 2);
+            profileSettings.close();
+            setNewMode(currMode);
+            Serial.println("Create new profile \"" + String(receivedChar + 2) + "\"!");
+        }
+        else if (receivedChar[1] == 'd') {
+            if (String(receivedChar + 2).equals("default")) {
+                Serial.println("You can't delete default profile!");
+            }
+            else {
+                profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_READ);
+                String buf = profileSettings.readString();
+                if (buf.equals(String(receivedChar + 2))) {
+                    profileSettings.close();
+                    profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
+                    profileSettings.print("default");
+                    profileSettings.close();
+                    setNewMode(currMode);
+                }
+                profileSettings.close();
+                SD.remove("/mode_settings/mode_" + String(currMode) + "/profile_" +
+                    String(receivedChar + 2) + ".txt");
+                Serial.println("Profile \"" + String(receivedChar + 2) + "\" deleted!");
+            }
+        }
+        else if (receivedChar[1] == 'g') {
+            Serial.println("There all profiles!");
+            if (NuSerial.isConnected())
+                NuSerial.println("There all profiles!");
+            profileSettings = SD.open("/mode_settings/mode_" + String(currMode));
+            String ans;
+            while (true) {
+                File file = profileSettings.openNextFile();
+                if (!file)
+                    break;
+                if (!String(file.name()).equals("current_profile.txt"))
+                    ans += file.name() + String("\t");
+            }
+            Serial.println(ans);
+            if (NuSerial.isConnected())
+                NuSerial.println(ans);
+            profileSettings.close();
+        }
+    }
+    else if (receivedChar[0] == 'a') {
+                Serial.println("Parameters was changed!");
+                mode->setAllParam(String(receivedChar + 1), ';');
+            }
+}
 
 void setup() {
     Serial.begin(115200);
     Serial.setTimeout(100);
 
+    NimBLEDevice::init("test");
+    NuSerial.setTimeout(10);
+    NuSerial.start();
+
     pinMode(FREE_PIN, INPUT);
+    pinMode(2, OUTPUT);
     randomSeed(analogRead(FREE_PIN));
 
     SD.begin(SD_PIN);
@@ -504,97 +614,33 @@ void loop() {
         mode->show(leds, &NUM_LEDS, &modeTimer);
     delay(1);
 
+    // работа с BLE
+    String stat = NuSerial.readStringUntil('\n');
+    if (stat.length() > 0) {
+        serialHandler(stat + "12");
+        Serial.println(stat);
+    }
+    digitalWrite(2, NuSerial.isConnected());
+    if (NuSerial.isConnected() && !isConnected) {
+        delay(1000); // todo узнать насколько оно надо
+        NuSerial.println(version);
+        while (true) {
+            String data = NuSerial.readString();
+            if (data.length() > 0) {
+                if (!data.toInt())
+                    NuSerial.disconnect();
+                break;
+            }
+        }
+    }
+    isConnected = NuSerial.isConnected();
+
     // работа с Serial портом
     if (Serial.available()) {
         receive += Serial.readString();
         if (receive[receive.length() - 1] == '\n') {
-            char receivedChar[receive.length() - 1];
-            receive.toCharArray(receivedChar, receive.length() - 1);
-            if (receivedChar[0] == 'b') {
-                isActive = !isActive;
-                Serial.println("Pause!");
-            }
-            else if (receivedChar[0] == 'g') {
-                Serial.println("Parameters!");
-                Serial.println(convertRawToSimple(mode->getAllParameters(), ';', '.'));
-            }
-            else if (receivedChar[0] == 'm') {
-                setNewMode(byte(receive[1]) - '0');
-                currMode = byte(receive[1]) - '0';
-                File setMode = SD.open("/current_mode.txt", FILE_WRITE);
-                setMode.print(char(currMode));
-                setMode.close();
-            }
-            else if (receivedChar[0] == 's') {
-                mode->setParam(byte(receivedChar[1]) - 'a' + 1, String(receivedChar + 2).toInt());
-                File setSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_READ);
-                String currProfile = setSettings.readString();
-                setSettings.close();
-                setSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/profile_"
-                    + String(currProfile) + ".txt", FILE_WRITE);
-                setSettings.print(mode->getAllParameters());
-                setSettings.close();
-            }
-            else if (receivedChar[0] == 'p') {
-                File profileSettings;
-                if (receivedChar[1] == 's') {
-                    if (SD.exists("/mode_settings/mode_" + String(currMode) + "/profile_" + String(receivedChar + 2) + ".txt")) {
-                        profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
-                        profileSettings.print(receivedChar + 2);
-                        setNewMode(currMode);
-                        Serial.println("Profile set to \"" + String(receivedChar + 2) + "\"!");
-                    }
-                    else {
-                        Serial.println("Profile \"" + String(receivedChar + 2) + "\" does not exist!");
-                    }
-                }
-                else if (receivedChar[1] == 'n') {
-                    profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/profile_" +
-                        String(receivedChar + 2) + ".txt", FILE_WRITE);
-                    profileSettings.print(mode->getAllParameters());
-                    profileSettings.close();
-                    profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
-                    profileSettings.print(receivedChar + 2);
-                    setNewMode(currMode);
-                    Serial.println("Create new profile \"" + String(receivedChar + 2) + "\"!");
-                }
-                else if (receivedChar[1] == 'd') {
-                    if (String(receivedChar + 2).equals("default")) {
-                        Serial.println("You can't delete default profile!");
-                    }
-                    else {
-                        profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_READ);
-                        String buf = profileSettings.readString();
-                        if (buf.equals(String(receivedChar + 2))) {
-                            profileSettings.close();
-                            profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
-                            profileSettings.print("default");
-                            setNewMode(currMode);
-                        }
-                        SD.remove("/mode_settings/mode_" + String(currMode) + "/profile_" +
-                            String(receivedChar + 2) + ".txt");
-                        Serial.println("Profile \"" + String(receivedChar + 2) + "\" deleted!");
-                    }
-                }
-                else if (receivedChar[1] == 'g') {
-                    Serial.println("There all profiles!");
-                    profileSettings = SD.open("/mode_settings/mode_" + String(currMode));
-                    while (true) {
-                        File file = profileSettings.openNextFile();
-                        if (!file)
-                            break;
-                        if (!String(file.name()).equals("current_profile.txt"))
-                            Serial.print(file.name() + String("\t"));
-                    }
-                    Serial.println();
-                }
-                profileSettings.close();
-            }
-            else if (receivedChar[0] == 'a') {
-                Serial.println("Parameters was changed!");
-                mode->setAllParam(String(receivedChar + 1), ';');
-            }
-            Serial.println(String(receivedChar));
+            serialHandler(receive);
+            Serial.print(receive);
             receive = "";
         }
     }
