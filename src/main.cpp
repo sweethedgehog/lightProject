@@ -1,5 +1,12 @@
 #include <Arduino.h>
+#include <NimBLE-Arduino/src/NimBLEDevice.h>
+#include "NuS-NimBLE-Serial/src/NuSerial.hpp"
 #include "FastLED/src/FastLED.h"
+#include <SPI.h>
+#include <SD.h>
+#include <WiFi.h>
+#include <GyverNTP/src/GyverNTP.h>
+// #include "IRremote.h"
 
 class Mode {
 public:
@@ -15,14 +22,27 @@ public:
                 break;
         }
     }
-    // установка сразу всех параметров
-    void setAllParam(byte len, byte* parameters) {
-        for (long i = 0; i < len; i++)
-            setParam(i + 1, parameters[i]);
+    // установка сразу всех параметров (?) todo разобраться насколько оно надо
+    void setAllParam(String parameters, char separateSymbol) {
+        String buf;
+        byte ind = 1;
+        for (long i = 0; i < parameters.length(); i++) {
+            if (parameters[i] != separateSymbol)
+                buf += parameters[i];
+            else {
+                setParam(ind, buf.toInt());
+                ind++;
+                buf = "";
+            }
+        }
     }
-    // получение сразу всех параметров
-    virtual String getAllParameters(String separateSymbol, String endSymbol) {
+    // получение всех параметров в нормальном виде (?) todo разобраться насколько оно надо
+    virtual String getAllParameters(char separateSymbol, char endSymbol) {
         return String(brightness) + separateSymbol + String(speed) + separateSymbol;
+    }
+    // получение всех параметров
+    virtual String getAllParameters() {
+        return String() + char(brightness) + char(speed);
     }
     // логика светодиодов (прописывается отдельно в каждом классе)
     virtual void calculate(CRGB *leds, const long *ledCount) {}
@@ -115,12 +135,16 @@ public:
                 break;
         }
     }
-    String getAllParameters(String separateSymbol, String endSymbol) override {
+    String getAllParameters(char separateSymbol, char endSymbol) override {
         return Mode::getAllParameters(separateSymbol, endSymbol) + String(hue) + separateSymbol +
             String(saturation) + separateSymbol + String(value) + separateSymbol + String(gap) + separateSymbol +
                 String(tailSize) + separateSymbol + String(rainbowCount) + separateSymbol + String(int(twoSides)) +
                     separateSymbol + String(int(direction)) + separateSymbol + String(int(isRunningLight)) +
                         separateSymbol + String(int(isRainbow)) + endSymbol;
+    }
+    String getAllParameters() override {
+        return Mode::getAllParameters() + char(hue) + char(saturation) + char(value) + char(gap) + char(tailSize)
+            + char(rainbowCount) + char(twoSides) + char(direction) + char(isRunningLight) + char(isRainbow);
     }
     void calculate(CRGB *leds, const long *ledCount) override {
         for (long i = 0; i < *ledCount / (twoSides + 1) + twoSides * (*ledCount % 2); i++) {
@@ -185,17 +209,24 @@ public:
                 baseStep = parameters;
                 break;
             case 11:
-                hueGap = parameters;
-                break;
+                minHue = parameters;
+            break;
+            case 12:
+                maxHue = parameters;
+            break;
         }
     }
-    String getAllParameters(String separateSymbol, String endSymbol) override {
+    String getAllParameters(char separateSymbol, char endSymbol) override {
         return Mode::getAllParameters(separateSymbol, endSymbol) + String(ratio) + separateSymbol +
             String(descendingStep) + separateSymbol + String(minSaturation) + separateSymbol + String(maxSaturation) +
                 separateSymbol + String(minBrightness) + separateSymbol + String(maxBrightness) + separateSymbol +
-                    String(int(isRainbowGoing)) + separateSymbol + String(baseStep) + separateSymbol + String(hueGap) +
-                        endSymbol;
+                    String(int(isRainbowGoing)) + separateSymbol + String(baseStep) + separateSymbol + String(minHue) +
+                        separateSymbol + String(maxHue) + endSymbol;
     }
+    String getAllParameters() override {
+        return Mode::getAllParameters() + char(ratio) + char(descendingStep) + char(minSaturation) + char(maxSaturation)
+        + char(minBrightness) + char(maxBrightness) + char(isRainbowGoing) + char(baseStep) + char(minHue) + char(maxHue);
+    };
     void calculate(CRGB *leds, const long *ledCount) override {
         long free = 0;
         for (long i = 0; i < *ledCount; i++) {
@@ -206,8 +237,8 @@ public:
         while (free > *ledCount - *ledCount / ratio) {
             long i = random(*ledCount);
             if (rgb2hsv_approximate(leds[i]).raw[2] == 0) {
-                leds[i] = CHSV(random(255 - hueGap, 256) + base * isRainbowGoing,
-                               255 - random(minSaturation, maxSaturation), random(minBrightness, maxBrightness));
+                leds[i] = CHSV(random(minHue, maxHue) + base * isRainbowGoing,
+                    255 - random(minSaturation, maxSaturation), random(minBrightness, maxBrightness));
                 free--;
             }
         }
@@ -224,7 +255,8 @@ private:
     byte maxBrightness = 255;
     bool isRainbowGoing = true;
     byte baseStep = 1;
-    byte hueGap = 10;
+    byte minHue = 0;
+    byte maxHue = 255;
 };
 
 class PerlinShow : public Mode {
@@ -270,12 +302,16 @@ public:
                 break;
         }
     }
-    String getAllParameters(String separateSymbol, String endSymbol) override {
+    String getAllParameters(char separateSymbol, char endSymbol) override {
         return Mode::getAllParameters(separateSymbol, endSymbol) + String(gridWidth) + separateSymbol +
             String(int(isCircle)) + separateSymbol + String(yScale) + separateSymbol + String(hueScale) +
                 separateSymbol + String(hueOffset) + separateSymbol + String(saturation) + separateSymbol +
                     String(int(isRunningLight)) + separateSymbol + String(gap) + separateSymbol + String(tailSize) +
                         separateSymbol + String(int(direction)) + endSymbol;
+    }
+    String getAllParameters() override {
+        return Mode::getAllParameters() + char(gridWidth) + char(isCircle) + char(yScale) + char(hueScale) +
+            char(hueOffset) + char(saturation) + char(isRunningLight) + char(gap) + char(tailSize) + char(direction);
     }
     void calculate(CRGB *leds, const long *ledCount) override {
         for (long i = 0; i < *ledCount; i++) {
@@ -345,9 +381,8 @@ private:
 
 class IridescentLights : public Mode {
     public:
-    IridescentLights(byte delayTime, byte runLightDelay, const long *ledsCount, CRGB *leds) {
+    IridescentLights(byte delayTime, const long *ledsCount, CRGB *leds) {
         this->delayTime = delayTime;
-        this->runLightDelay = runLightDelay;
         step = random(4294967295);
         for (long i = 0; i < *ledsCount; i++) {
             leds[i] = CHSV(random(256), 255 - saturation, 255);
@@ -368,9 +403,12 @@ class IridescentLights : public Mode {
                 break;
         }
     }
-    String getAllParameters(String separateSymbol, String endSymbol) override {
+    String getAllParameters(char separateSymbol, char endSymbol) override {
         return Mode::getAllParameters(separateSymbol, endSymbol) + String(saturation) +
             separateSymbol + String(maxCount) + separateSymbol + String(minCount) + endSymbol;
+    }
+    String getAllParameters() override {
+        return Mode::getAllParameters() + char(saturation) + char(maxCount) + char(minCount);
     }
     void calculate(CRGB *leds, const long *ledsCount) override {
         for (long i = 0; i < *ledsCount; i++) {
@@ -389,26 +427,26 @@ class IridescentLights : public Mode {
     uint32_t step = 0;
     byte count = 0;
     /// настраиваемые параметры
-    byte runLightDelay;
-    byte saturation = 0;
+    byte saturation = 0;  //todo ОНО НЕ РАБОТАЕТ!!!!
     byte maxCount = 255;
     byte minCount = 1;
 };
 
 const long NUM_LEDS = 61;
-#define PIN 12
+#define LED_PIN 12
 #define FREE_PIN 34
+#define SD_PIN 5
 
 CRGB leds[NUM_LEDS];
 Mode *mode = nullptr;
+byte currMode = 2;
 uint32_t modeTimer = 0;
 String receive;
 
 bool isActive = true;
 
 void setNewMode(byte modeNumber) {
-    if (mode != nullptr)
-        delete mode;
+    delete mode;
     switch (modeNumber) {
         case 0:
             mode = new SingleColor(20, 80);
@@ -419,10 +457,29 @@ void setNewMode(byte modeNumber) {
         case 2:
             mode = new PerlinShow(20, 80);
         break;
-        case 3:
-            mode = new IridescentLights(20, 80, &NUM_LEDS, leds);
+        default:
+            mode = new IridescentLights(20, &NUM_LEDS, leds);
         break;
     }
+    File modeSettings = SD.open("/mode_settings/mode_" + String(modeNumber) + "/current_profile.txt", FILE_READ);
+    String currProfile = modeSettings.readString();
+    modeSettings.close();
+    modeSettings = SD.open("/mode_settings/mode_" + String(modeNumber) + "/profile_" + currProfile + ".txt", FILE_READ);
+    long buf = long(modeSettings.read());
+    long i = 1;
+    while (buf != -1) {
+        mode->setParam(i, buf);
+        i++;
+        buf = long(modeSettings.read());
+    }
+    modeSettings.close();
+}
+String convertRawToSimple(String raw, char separateSymbol, char endSymbol) {
+    String result = String(byte(raw[0]));
+    for (int i = 1; i < raw.length(); i++) {
+        result += separateSymbol + String(byte(raw[i]));
+    }
+    return result + endSymbol;
 }
 
 void setup() {
@@ -432,9 +489,14 @@ void setup() {
     pinMode(FREE_PIN, INPUT);
     randomSeed(analogRead(FREE_PIN));
 
-    FastLED.addLeds<WS2812, PIN, GRB>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+    SD.begin(SD_PIN);
 
-    setNewMode(2);
+    FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+
+    File getMode = SD.open("/current_mode.txt", FILE_READ);
+    currMode = byte(getMode.read());
+    getMode.close();
+    setNewMode(currMode);
 }
 
 void loop() {
@@ -447,15 +509,91 @@ void loop() {
         receive += Serial.readString();
         if (receive[receive.length() - 1] == '\n') {
             char receivedChar[receive.length() - 1];
-            receive.toCharArray(receivedChar, receive.length());
-            if (receivedChar[0] == 'p')
+            receive.toCharArray(receivedChar, receive.length() - 1);
+            if (receivedChar[0] == 'b') {
                 isActive = !isActive;
-            else if (receivedChar[0] == 'g')
-                Serial.println(mode->getAllParameters(";", "."));
-            else if (receivedChar[0] == 'm')
-                setNewMode(int(receive[1]) - '0');
-            else if (receivedChar[0] == 's')
+                Serial.println("Pause!");
+            }
+            else if (receivedChar[0] == 'g') {
+                Serial.println("Parameters!");
+                Serial.println(convertRawToSimple(mode->getAllParameters(), ';', '.'));
+            }
+            else if (receivedChar[0] == 'm') {
+                setNewMode(byte(receive[1]) - '0');
+                currMode = byte(receive[1]) - '0';
+                File setMode = SD.open("/current_mode.txt", FILE_WRITE);
+                setMode.print(char(currMode));
+                setMode.close();
+            }
+            else if (receivedChar[0] == 's') {
                 mode->setParam(byte(receivedChar[1]) - 'a' + 1, String(receivedChar + 2).toInt());
+                File setSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_READ);
+                String currProfile = setSettings.readString();
+                setSettings.close();
+                setSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/profile_"
+                    + String(currProfile) + ".txt", FILE_WRITE);
+                setSettings.print(mode->getAllParameters());
+                setSettings.close();
+            }
+            else if (receivedChar[0] == 'p') {
+                File profileSettings;
+                if (receivedChar[1] == 's') {
+                    if (SD.exists("/mode_settings/mode_" + String(currMode) + "/profile_" + String(receivedChar + 2) + ".txt")) {
+                        profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
+                        profileSettings.print(receivedChar + 2);
+                        setNewMode(currMode);
+                        Serial.println("Profile set to \"" + String(receivedChar + 2) + "\"!");
+                    }
+                    else {
+                        Serial.println("Profile \"" + String(receivedChar + 2) + "\" does not exist!");
+                    }
+                }
+                else if (receivedChar[1] == 'n') {
+                    profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/profile_" +
+                        String(receivedChar + 2) + ".txt", FILE_WRITE);
+                    profileSettings.print(mode->getAllParameters());
+                    profileSettings.close();
+                    profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
+                    profileSettings.print(receivedChar + 2);
+                    setNewMode(currMode);
+                    Serial.println("Create new profile \"" + String(receivedChar + 2) + "\"!");
+                }
+                else if (receivedChar[1] == 'd') {
+                    if (String(receivedChar + 2).equals("default")) {
+                        Serial.println("You can't delete default profile!");
+                    }
+                    else {
+                        profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_READ);
+                        String buf = profileSettings.readString();
+                        if (buf.equals(String(receivedChar + 2))) {
+                            profileSettings.close();
+                            profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
+                            profileSettings.print("default");
+                            setNewMode(currMode);
+                        }
+                        SD.remove("/mode_settings/mode_" + String(currMode) + "/profile_" +
+                            String(receivedChar + 2) + ".txt");
+                        Serial.println("Profile \"" + String(receivedChar + 2) + "\" deleted!");
+                    }
+                }
+                else if (receivedChar[1] == 'g') {
+                    Serial.println("There all profiles!");
+                    profileSettings = SD.open("/mode_settings/mode_" + String(currMode));
+                    while (true) {
+                        File file = profileSettings.openNextFile();
+                        if (!file)
+                            break;
+                        if (!String(file.name()).equals("current_profile.txt"))
+                            Serial.print(file.name() + String("\t"));
+                    }
+                    Serial.println();
+                }
+                profileSettings.close();
+            }
+            else if (receivedChar[0] == 'a') {
+                Serial.println("Parameters was changed!");
+                mode->setAllParam(String(receivedChar + 1), ';');
+            }
             Serial.println(String(receivedChar));
             receive = "";
         }
