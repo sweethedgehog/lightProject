@@ -437,6 +437,9 @@ const long NUM_LEDS = 61;
 #define FREE_PIN 34
 #define SD_PIN 5
 
+TaskHandle_t showTask;
+TaskHandle_t handlerTask;
+
 CRGB leds[NUM_LEDS];
 Mode *mode = nullptr;
 byte currMode = 2;
@@ -585,20 +588,10 @@ void serialHandler(String receive) {
     }
 }
 
-void setup() {
-    Serial.begin(115200);
-    Serial.setTimeout(100);
-
-    NimBLEDevice::init("test");
-    NimBLEDevice::setMTU(517);
-    NuSerial.setTimeout(10);
-    NuSerial.start();
-
+void showTaskCode(void *pvParameeters) {
     pinMode(FREE_PIN, INPUT);
     pinMode(2, OUTPUT);
     randomSeed(analogRead(FREE_PIN));
-
-    SD.begin(SD_PIN);
 
     FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
 
@@ -606,44 +599,66 @@ void setup() {
     currMode = byte(getMode.read());
     getMode.close();
     setNewMode(currMode);
-}
-
-void loop() {
-    if (isActive)
-        mode->show(leds, &NUM_LEDS, &modeTimer);
-    delay(1);
-
-    // работа с BLE
-    String stat = "";
-    if (NuSerial.available()) {
-        stat = NuSerial.readStringUntil('\n');
-        if (stat.length() > 0) {
-            serialHandler(stat + "12");
-            Serial.println(stat);
-        }
+    while (true) {
+        if (isActive)
+            mode->show(leds, &NUM_LEDS, &modeTimer);
+        delay(1);
     }
-    digitalWrite(2, NuSerial.isConnected());
-    if (NuSerial.isConnected() && !isConnected) {
-        delay(1000); // todo узнать насколько оно надо
-        NuSerial.println(version);
-        while (true) {
-            String data = NuSerial.readString();
-            if (data.length() > 0) {
-                if (!data.toInt())
-                    NuSerial.disconnect();
-                break;
+}
+void handlerTaskCode(void *pvParameters) {
+    NimBLEDevice::init("test");
+    NimBLEDevice::setMTU(517);
+    NuSerial.setTimeout(10);
+    NuSerial.start();
+
+    while (true) {
+        // работа с BLE
+        String stat = "";
+        if (NuSerial.available()) {
+            stat = NuSerial.readStringUntil('\n');
+            if (stat.length() > 0) {
+                serialHandler(stat + "12");
+                Serial.println(stat);
+            }
+        }
+        digitalWrite(2, NuSerial.isConnected());
+        if (NuSerial.isConnected() && !isConnected) {
+            delay(1000); // todo узнать насколько оно надо
+            NuSerial.println(version);
+            while (true) {
+                String data = NuSerial.readString();
+                if (data.length() > 0) {
+                    if (!data.toInt())
+                        NuSerial.disconnect();
+                    break;
+                }
+            }
+        }
+        isConnected = NuSerial.isConnected();
+        // работа с Serial портом
+        if (Serial.available()) {
+            receive += Serial.readString();
+            if (receive[receive.length() - 1] == '\n') {
+                serialHandler(receive);
+                Serial.print(receive);
+                receive = "";
             }
         }
     }
-    isConnected = NuSerial.isConnected();
-
-    // работа с Serial портом
-    if (Serial.available()) {
-        receive += Serial.readString();
-        if (receive[receive.length() - 1] == '\n') {
-            serialHandler(receive);
-            Serial.print(receive);
-            receive = "";
-        }
-    }
 }
+
+void setup() {
+    Serial.begin(115200);
+    Serial.setTimeout(100);
+
+    if (!SD.begin(SD_PIN)) {
+        Serial.println("SD card not initialized!");
+        while (true) {}
+    }
+
+    xTaskCreatePinnedToCore(showTaskCode, "showTask", 8192, NULL, 10, &showTask, 1);
+    delay(500);
+    xTaskCreatePinnedToCore(handlerTaskCode, "handlerTask", 8192, NULL, 0, &handlerTask, 0);
+}
+
+void loop() {}
