@@ -2,10 +2,8 @@
 #include <NimBLE-Arduino/src/NimBLEDevice.h>
 #include "NuS-NimBLE-Serial/src/NuSerial.hpp"
 #include "FastLED/src/FastLED.h"
-#include <SPI.h>
 #include <SD.h>
 #include <WiFi.h>
-#include <GyverNTP/src/GyverNTP.h>
 // #include "IRremote.h"
 
 class Mode {
@@ -582,9 +580,9 @@ void serialHandler(String receive) {
         }
     }
     else if (receivedChar[0] == 'a') {
-                Serial.println("Parameters was changed!");
-                mode->setAllParam(String(receivedChar + 1), ';');
-            }
+        Serial.println("Parameters was changed!");
+        mode->setAllParam(String(receivedChar + 1), ';');
+    }
 }
 
 void setup() {
@@ -592,6 +590,7 @@ void setup() {
     Serial.setTimeout(100);
 
     NimBLEDevice::init("test");
+    NimBLEDevice::setMTU(517);
     NuSerial.setTimeout(10);
     NuSerial.start();
 
@@ -615,10 +614,13 @@ void loop() {
     delay(1);
 
     // работа с BLE
-    String stat = NuSerial.readStringUntil('\n');
-    if (stat.length() > 0) {
-        serialHandler(stat + "12");
-        Serial.println(stat);
+    String stat = "";
+    if (NuSerial.available()) {
+        stat = NuSerial.readStringUntil('\n');
+        if (stat.length() > 0) {
+            serialHandler(stat + "12");
+            Serial.println(stat);
+        }
     }
     digitalWrite(2, NuSerial.isConnected());
     if (NuSerial.isConnected() && !isConnected) {
