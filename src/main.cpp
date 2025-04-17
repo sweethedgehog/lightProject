@@ -430,25 +430,72 @@ class IridescentLights : public Mode {
     byte minCount = 1;
 };
 
+class Time {
+public:
+    Time (byte serv) {
+        udp.begin(serv);
+    }
+    void updateTime(byte timeZone) {
+        byte packet[48];
+        packet[0] = 0b11100011;
+        udp.beginPacket("pool.ntp.org", 123);
+        udp.write(packet, sizeof(packet));
+        udp.endPacket();
+
+        delay(100);
+        if (udp.parsePacket() < 48) return;
+
+        udp.read(packet, 48);
+        unsigned long epoch = word(packet[40], packet[41]) << 16 | word(packet[42], packet[43]);
+        epoch = epoch - 2208988800UL + timeZone * 3600;
+
+        day = (epoch / 86400 + 4) % 7;
+        hour = (epoch % 86400) / 3600;
+        minute = (epoch % 3600) / 60;
+    }
+    byte getDay() const {return day;}
+    byte getHour() const {return hour;}
+    byte getMinute() const {return minute;}
+private:
+    WiFiUDP udp;
+    byte day = 0;
+    byte hour = 0;
+    byte minute = 0;
+};
+
 #define version "0.0"
 
+// Константы
 const long NUM_LEDS = 61;
 #define LED_PIN 12
 #define FREE_PIN 34
 #define SD_PIN 5
 
+// Два ядра
 TaskHandle_t showTask;
 TaskHandle_t handlerTask;
 
+// WiFi и NTP
+String wifiSsid;
+String wifiPassword;
+int8_t timeZone;
+
+// Для режимов
 CRGB leds[NUM_LEDS];
 Mode *mode = nullptr;
 byte currMode = 2;
 uint32_t modeTimer = 0;
+
+// Для приходящих данных
 String receive;
+
+// Для BLE todo убрать подсветку BLE
 bool isConnected = false;
 
+// Для остановки выполнения todo скорее всего надо будет убрать
 bool isActive = true;
 
+void(* reset) (void) = 0;
 void setNewMode(byte modeNumber) {
     delete mode;
     switch (modeNumber) {
@@ -586,6 +633,35 @@ void serialHandler(String receive) {
         Serial.println("Parameters was changed!");
         mode->setAllParam(String(receivedChar + 1), ';');
     }
+    else if (receivedChar[0] == 'w') {
+        if (receivedChar[1] == 's') {
+            wifiSsid = String(receivedChar + 2);
+            File ssid = SD.open("/wifi/ssid.txt", FILE_WRITE);
+            ssid.print(wifiSsid);
+            ssid.close();
+            Serial.println("Wifi SSID was changed to \"" + wifiSsid + "\"!");
+        }
+        else if (receivedChar[1] == 'p') {
+            wifiPassword = String(receivedChar + 2);
+            File password = SD.open("/wifi/password.txt", FILE_WRITE);
+            password.print(wifiPassword);
+            password.close();
+            Serial.println("Wifi password was changed to \"" + wifiPassword + "\"!");
+        }
+    }
+    else if (receivedChar[0] == 't') {
+        if (receivedChar[1] == 'z') {
+            timeZone = String(receivedChar + 2).toInt();
+            File zone = SD.open("/time/time_zone.txt", FILE_WRITE);
+            zone.print(timeZone);
+            zone.close();
+            Serial.println("Time zone was changed to \"" + String(timeZone) + "\"!");
+        }
+    }
+    else if (receivedChar[0] == 'r') {
+        Serial.println("Rebooting now...");
+        reset();
+    }
 }
 
 void showTaskCode(void *pvParameeters) {
@@ -610,6 +686,27 @@ void handlerTaskCode(void *pvParameters) {
     NimBLEDevice::setMTU(517);
     NuSerial.setTimeout(10);
     NuSerial.start();
+
+    File file = SD.open("/wifi/ssid.txt", FILE_READ);
+    wifiSsid = file.readString();
+    file.close();
+    file = SD.open("/wifi/password.txt", FILE_READ);
+    wifiPassword = file.readString();
+    file.close();
+
+    WiFi.begin(wifiSsid, wifiPassword);
+    auto* wifiTime = new uint32_t;
+    *wifiTime = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - *wifiTime < 3000) {}
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi not connected!");
+    }
+    delete wifiTime;
+
+    file = SD.open("/time/time_zone.txt", FILE_READ);
+    timeZone = file.readString().toInt();
+    file.close();
+    Time timeNow(123);
 
     while (true) {
         // работа с BLE
@@ -644,6 +741,10 @@ void handlerTaskCode(void *pvParameters) {
                 receive = "";
             }
         }
+
+        // timeNow.updateTime(timeZone);
+        // Serial.printf("Время в Москве: %01d:%02d:%02d\n", timeNow.getDay(), timeNow.getHour(), timeNow.getMinute());
+        // delay(1000);
     }
 }
 
