@@ -432,8 +432,8 @@ class IridescentLights : public Mode {
 
 class Time {
 public:
-    Time (byte serv) {
-        udp.begin(serv);
+    Time () {
+        udp.begin(123);
     }
     void updateTime(byte timeZone) {
         byte packet[48];
@@ -453,6 +453,13 @@ public:
         hour = (epoch % 86400) / 3600;
         minute = (epoch % 3600) / 60;
     }
+    long getRawTime() {
+        return getDay() * 1440 + getHour() * 60 + getMinute();
+    }
+    // todo delete this!!!!
+    long getRawTime(long raw) {
+        return raw;
+    }
     byte getDay() const {return day;}
     byte getHour() const {return hour;}
     byte getMinute() const {return minute;}
@@ -461,6 +468,134 @@ private:
     byte day = 0;
     byte hour = 0;
     byte minute = 0;
+};
+
+class Alarms {
+public:
+    Alarms() {
+
+    }
+    void findClosest() {
+        count = 0;
+        timeNow.updateTime(timeZone);
+
+        File alarms = SD.open("/time/alarms", FILE_READ);
+        File file = alarms.openNextFile();
+        if (!file) return;
+        count = 1;
+        delete alarm;
+        alarm = new Alarm(file.readString(), file.name());
+        file.close();
+        long minTime = alarm->getRawTimeDiv(timeNow.getRawTime());
+        while (true) {
+            Alarm *buf = nullptr;
+            file = alarms.openNextFile();
+            if (!file) {
+                file.close();
+                delete buf;
+                break;
+            }
+            count++;
+            buf = new Alarm(file.readString(), file.name());
+            file.close();
+            long bufMinTime = buf->getRawTimeDiv(timeNow.getRawTime());
+            if ((minTime == -1 || !alarm->isOn || bufMinTime < minTime) && bufMinTime != -1 && buf->isOn) {
+                delete alarm;
+                alarm = buf;
+                minTime = bufMinTime;
+            }
+            else
+                delete buf;
+        }
+        alarms.close();
+        Serial.println("count alarms: " + String(long(count)));
+        Serial.println(String(alarm->currName));
+    }
+    // todo delete this
+    String getAlarm() {
+        return alarm->getSettings();
+    }
+private:
+    unsigned long count;
+    struct Alarm {
+        Alarm (String data, String name) {
+            currName = name;
+            const char *bytes = data.c_str();
+            isOn = bytes[0] / 128;
+            for (byte i = 0; i < 7; i++)
+                days[i] = bool(long(bytes[0] % long(pow(2, i + 1)) / pow(2, i)));
+            minute = bytes[1];
+            hour = bytes[2];
+            razingTime = bytes[3];
+            mode = bytes[4];
+            profile = String(bytes + 4, data.length() - 4);
+        }
+        long getRawTimeDiv(long rawTime) {
+            long minTime = -1;
+            for (byte i = 0; i < 7; i++) {
+                long buf = (rawTime - i * 1440 - hour * 60 - minute + 10080) % 10080;
+                if ((minTime == -1 || buf < minTime) && days[i])
+                    minTime = rawTime;
+            }
+            return minTime;
+        }
+        String getSettings() {
+            String ans;
+            char buf = char(128 * isOn);
+            for (byte i = 0; i < 7; i++)
+                buf += days[i] * pow(2, i);
+            ans += buf;
+            ans += char(minute);
+            ans += char(hour);
+            ans += char(razingTime);
+            ans += char(mode);
+            ans += profile;
+            return ans;
+        }
+        void setSetting(String setting, byte index) {
+            switch (index) {
+                case 0:
+                    isOn = setting[0];
+                    break;
+                case 1:
+                    for (byte i = 0; i < 7; i++)
+                        days[i] = bool(long(setting[0] % long(pow(2, i + 1)) / pow(2, i)));
+                    break;
+                case 2:
+                    minute = setting[0];
+                    break;
+                case 3:
+                    hour = setting[0];
+                    break;
+                case 4:
+                    razingTime = setting[0];
+                    break;
+                case 5:
+                    mode = setting[0];
+                    break;
+                case 6:
+                    profile = setting;
+                    break;
+            }
+            saveSettings();
+        }
+        void saveSettings() {
+            File file = SD.open("/time/alarms/" + currName, FILE_WRITE);
+            file.print(getSettings());
+            file.close();
+        }
+        bool isOn;
+        byte hour;
+        byte minute;
+        byte razingTime;
+        bool days[7];
+        String profile;
+        byte mode;
+        String currName;
+    };
+    Alarm *alarm;
+    Time timeNow;
+    uint8_t timeZone = 3;
 };
 
 #define version "0.0"
@@ -479,6 +614,7 @@ TaskHandle_t handlerTask;
 String wifiSsid;
 String wifiPassword;
 int8_t timeZone;
+Time *timeNow;
 
 // Для режимов
 CRGB leds[NUM_LEDS];
@@ -495,7 +631,7 @@ bool isConnected = false;
 // Для остановки выполнения todo скорее всего надо будет убрать
 bool isActive = true;
 
-void(* reset) (void) = 0;
+void(* reset) () = nullptr;
 void setNewMode(byte modeNumber) {
     delete mode;
     switch (modeNumber) {
@@ -664,7 +800,7 @@ void serialHandler(String receive) {
     }
 }
 
-void showTaskCode(void *pvParameeters) {
+void showTaskCode(void *pvParameters) {
     pinMode(FREE_PIN, INPUT);
     pinMode(2, OUTPUT);
     randomSeed(analogRead(FREE_PIN));
@@ -706,7 +842,20 @@ void handlerTaskCode(void *pvParameters) {
     file = SD.open("/time/time_zone.txt", FILE_READ);
     timeZone = file.readString().toInt();
     file.close();
-    Time timeNow(123);
+    timeNow = new Time();
+
+    // file = SD.open("/time/alarms/1.txt", FILE_WRITE);
+    // file.print(String(char(192)) + String(char(59)) + String(char(23)) + String(char(240)) + String(char(3)));
+    // file.close();
+    Alarms alarms;
+    alarms.findClosest();
+    // Serial.println(String(char(192)) + String(char(59)) + String(char(23)) + String(char(240)) + String(char(3)));
+    // file = SD.open("/time/alarms/1.txt", FILE_READ);
+    String b = alarms.getAlarm()/*file.readString()*/;
+    for (int i = 0; i < 5; i++) {
+        Serial.print(String(byte(b[i])) + "(" + b[i] + ")" + "\t");
+    }
+    // file.close();
 
     while (true) {
         // работа с BLE
