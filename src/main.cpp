@@ -146,7 +146,7 @@ public:
     }
     void calculate(CRGB *leds, const long *ledCount) override {
         for (long i = 0; i < *ledCount / (twoSides + 1) + twoSides * (*ledCount % 2); i++) {
-            byte brightnessForLed = calculateRunLight(i, gap, tailSize, direction, &run, runLightDelay, &moveCounter);
+            byte brightnessForLed = calculateRunLight(i, gap, tailSize, true, &run, runLightDelay, &moveCounter);
             byte rainbowHue = calculateRainbow(i, &base, rainbowCount, ledCount, twoSides);
             leds[direction ? i : *ledCount / (twoSides + 1) - i - 1 + twoSides] =
                     CHSV(isRainbow ? rainbowHue : hue,
@@ -277,6 +277,7 @@ public:
                 break;
             case 5:
                 yScale = parameters; // тысячные
+                break;
             case 6:
                 hueScale = parameters;
                 break;
@@ -316,7 +317,7 @@ public:
             leds[i] = CHSV((perlinNoise(i, float(gridWidth) / *ledCount, float(yScale) / 1000) + 1)
                 * hueScale + hueOffset,255 - saturation, !isRunningLight ? 255 : i <= *ledCount / 2 ?
                 calculateRunLight(i, gap, tailSize, direction, &run, runLightDelay, &moveCounter) :
-                calculateRunLight(*ledCount - i, gap, 3, direction, &run, runLightDelay, &moveCounter));
+                calculateRunLight(*ledCount - i - 1, gap, tailSize, direction, &run, runLightDelay, &moveCounter));
         }
         y++;
     }
@@ -430,96 +431,126 @@ class IridescentLights : public Mode {
     byte minCount = 1;
 };
 
-class Time {
+class AlarmManager {
 public:
-    Time () {
-        udp.begin(123);
-    }
-    void updateTime(byte timeZone) {
-        byte packet[48];
-        packet[0] = 0b11100011;
-        udp.beginPacket("pool.ntp.org", 123);
-        udp.write(packet, sizeof(packet));
-        udp.endPacket();
-
-        delay(100);
-        if (udp.parsePacket() < 48) return;
-
-        udp.read(packet, 48);
-        unsigned long epoch = word(packet[40], packet[41]) << 16 | word(packet[42], packet[43]);
-        epoch = epoch - 2208988800UL + timeZone * 3600;
-
-        day = (epoch / 86400 + 4) % 7;
-        hour = (epoch % 86400) / 3600;
-        minute = (epoch % 3600) / 60;
-    }
-    long getRawTime() {
-        return getDay() * 1440 + getHour() * 60 + getMinute();
-    }
-    // todo delete this!!!!
-    long getRawTime(long raw) {
-        return raw;
-    }
-    byte getDay() const {return day;}
-    byte getHour() const {return hour;}
-    byte getMinute() const {return minute;}
-private:
-    WiFiUDP udp;
-    byte day = 0;
-    byte hour = 0;
-    byte minute = 0;
-};
-
-class Alarms {
-public:
-    Alarms() {
-
+    AlarmManager(uint8_t timeZone) {
+        timeNow = new Time(123);
+        this->timeZone = timeZone;
+        findClosest();
     }
     void findClosest() {
-        count = 0;
-        timeNow.updateTime(timeZone);
+        timeNow->updateTime(timeZone);
 
+        File file;
         File alarms = SD.open("/time/alarms", FILE_READ);
-        File file = alarms.openNextFile();
-        if (!file) return;
-        count = 1;
-        delete alarm;
-        alarm = new Alarm(file.readString(), file.name());
-        file.close();
-        long minTime = alarm->getRawTimeDiv(timeNow.getRawTime());
+        alarm = Alarm();
+        long minTime = -1;
         while (true) {
-            Alarm *buf = nullptr;
+            Alarm buf;
             file = alarms.openNextFile();
             if (!file) {
                 file.close();
-                delete buf;
                 break;
             }
-            count++;
-            buf = new Alarm(file.readString(), file.name());
+            buf = Alarm(file.readString());
             file.close();
-            long bufMinTime = buf->getRawTimeDiv(timeNow.getRawTime());
-            if ((minTime == -1 || !alarm->isOn || bufMinTime < minTime) && bufMinTime != -1 && buf->isOn) {
-                delete alarm;
+            long bufMinTime = buf.getRawTimeDif(timeNow->getRawTime());
+            if ((minTime == -1 || bufMinTime < minTime) && bufMinTime != -1 && buf.isOn) {
                 alarm = buf;
                 minTime = bufMinTime;
             }
-            else
-                delete buf;
         }
         alarms.close();
-        Serial.println("count alarms: " + String(long(count)));
-        Serial.println(String(alarm->currName));
+        delete mode;
+        if (!alarm.wasInit) {
+            mode = new Mode();
+            return;
+        }
+        switch (alarm.mode) {
+            case 0:
+                mode = new SingleColor(20, 80);
+                break;
+            case 1:
+                mode = new Party(25);
+                break;
+            default:
+                mode = new PerlinShow(20, 80);
+                break;
+            // case 3:
+            //     mode = new IridescentLights(20, &NUM_LEDS, leds);
+        }
+        file = SD.open("/mode_settings/mode_" + String(alarm.mode) + "/profile_" + alarm.profile + ".txt", FILE_READ);
+        long buf = long(file.read());
+        byte i = 1;
+        while (buf != -1) {
+            mode->setParam(i, buf);
+            ++i;
+            buf = long(file.read());
+        }
+        file.close();
     }
-    // todo delete this
-    String getAlarm() {
-        return alarm->getSettings();
+    void update(CRGB *leds, const long *ledCount, uint32_t *timer) {
+        mode->show(leds, ledCount, timer);
+        long buf = long(float(millis() - startAlarm) / 60000 * 255 / alarm.razingTime);
+        mode->setParam(1, byte(min(buf, long(255))));
     }
+    void checkAlarm() {
+        if (timeNow != nullptr && WiFi.status() == WL_CONNECTED) {
+            timeNow->updateTime(timeZone);
+            if (alarm.wasInit) {
+                if (alarm.getRawTimeDif(timeNow->getRawTime()) == 0 && !isActive) {
+                    startAlarm = millis();
+                    isActive = true;
+                    if (NuSerial.isConnected())
+                        NuSerial.println("alarm_activated");
+                }
+            }
+        }
+    }
+    bool checkIsActive() const {return isActive;}
+    void offAlarm() {
+        isActive = false;
+        findClosest();
+    }
+    void setTimeZone(uint8_t timeZone){this->timeZone = timeZone;}
 private:
-    unsigned long count;
+    class Time {
+    public:
+        explicit Time (byte serv) {
+            udp.begin(serv);
+        }
+        void updateTime(byte timeZone) {
+            byte packet[48];
+            packet[0] = 0b11100011;
+            udp.beginPacket("pool.ntp.org", 123);
+            udp.write(packet, sizeof(packet));
+            udp.endPacket();
+
+            delay(100);
+            if (udp.parsePacket() < 48) return;
+
+            udp.read(packet, 48);
+            unsigned long epoch = word(packet[40], packet[41]) << 16 | word(packet[42], packet[43]);
+            epoch = epoch - 2208988800UL + timeZone * 3600;
+
+            day = (epoch / 86400 + 4) % 7;
+            hour = (epoch % 86400) / 3600;
+            minute = (epoch % 3600) / 60;
+        }
+        long getRawTime() {
+            return getDay() * 1440 + getHour() * 60 + getMinute();
+        }
+        byte getDay() const {return day;}
+        byte getHour() const {return hour;}
+        byte getMinute() const {return minute;}
+    private:
+        WiFiUDP udp;
+        byte day = 0;
+        byte hour = 0;
+        byte minute = 0;
+    };
     struct Alarm {
-        Alarm (String data, String name) {
-            currName = name;
+        Alarm (String data) {
             const char *bytes = data.c_str();
             isOn = bytes[0] / 128;
             for (byte i = 0; i < 7; i++)
@@ -528,14 +559,16 @@ private:
             hour = bytes[2];
             razingTime = bytes[3];
             mode = bytes[4];
-            profile = String(bytes + 4, data.length() - 4);
+            profile = String(bytes + 5);
+            wasInit = true;
         }
-        long getRawTimeDiv(long rawTime) {
+        Alarm(){}
+        long getRawTimeDif(long rawTime) {
             long minTime = -1;
             for (byte i = 0; i < 7; i++) {
-                long buf = (rawTime - i * 1440 - hour * 60 - minute + 10080) % 10080;
+                long buf = (i * 1440 + hour * 60 + minute - rawTime + 10080) % 10080;
                 if ((minTime == -1 || buf < minTime) && days[i])
-                    minTime = rawTime;
+                    minTime = buf;
             }
             return minTime;
         }
@@ -549,41 +582,21 @@ private:
             ans += char(hour);
             ans += char(razingTime);
             ans += char(mode);
-            ans += profile;
             return ans;
         }
-        void setSetting(String setting, byte index) {
-            switch (index) {
-                case 0:
-                    isOn = setting[0];
-                    break;
-                case 1:
-                    for (byte i = 0; i < 7; i++)
-                        days[i] = bool(long(setting[0] % long(pow(2, i + 1)) / pow(2, i)));
-                    break;
-                case 2:
-                    minute = setting[0];
-                    break;
-                case 3:
-                    hour = setting[0];
-                    break;
-                case 4:
-                    razingTime = setting[0];
-                    break;
-                case 5:
-                    mode = setting[0];
-                    break;
-                case 6:
-                    profile = setting;
-                    break;
+        String getRawSettings() {
+            String ans;
+            ans += byte(isOn);
+            for (byte i = 0; i < 7; i++) {
+                ans += days[i];
             }
-            saveSettings();
+            ans += minute;
+            ans += hour;
+            ans += razingTime;
+            ans += mode;
+            return ans;
         }
-        void saveSettings() {
-            File file = SD.open("/time/alarms/" + currName, FILE_WRITE);
-            file.print(getSettings());
-            file.close();
-        }
+        bool wasInit = false;
         bool isOn;
         byte hour;
         byte minute;
@@ -591,14 +604,17 @@ private:
         bool days[7];
         String profile;
         byte mode;
-        String currName;
     };
-    Alarm *alarm;
-    Time timeNow;
+    Alarm alarm;
+    Time *timeNow = nullptr;
     uint8_t timeZone = 3;
+    bool isActive = false;
+    Mode *mode = nullptr;
+    uint32_t startAlarm = 0;
 };
 
-#define version "0.0"
+#define VERSION "1.0"
+#define MODE_COUNT 4
 
 // Константы
 const long NUM_LEDS = 61;
@@ -613,8 +629,8 @@ TaskHandle_t handlerTask;
 // WiFi и NTP
 String wifiSsid;
 String wifiPassword;
-int8_t timeZone;
-Time *timeNow;
+AlarmManager *alarmManager = nullptr;
+uint32_t alarmTimer = 0;
 
 // Для режимов
 CRGB leds[NUM_LEDS];
@@ -669,13 +685,20 @@ String convertRawToSimple(String raw, char separateSymbol, char endSymbol) {
     return result + endSymbol;
 }
 void serialHandler(String receive) {
-    char receivedChar[receive.length() - 1];
-    receive.toCharArray(receivedChar, receive.length() - 1);
-    if (receivedChar[0] == 'b') {
+    if (receive[0] == 'b') {
         isActive = !isActive;
+        FastLED.clear();
+        FastLED.show();
         Serial.println("Pause!");
     }
-    else if (receivedChar[0] == 'g') {
+    else if (receive[0] == 'n') {
+        String name = receive.substring(1);
+        Serial.println("Bluetooth name was changed to \"" + name + "\"!");
+        File nameSetting = SD.open("/name.txt", FILE_WRITE);
+        nameSetting.print(name);
+        nameSetting.close();
+    }
+    else if (receive[0] == 'g') {
         Serial.println("Parameters!");
         Serial.println(convertRawToSimple(mode->getAllParameters(), ';', '.'));
         if (NuSerial.isConnected()) {
@@ -684,15 +707,15 @@ void serialHandler(String receive) {
             NuSerial.println(convertRawToSimple(mode->getAllParameters(), ';', '.'));
         }
     }
-    else if (receivedChar[0] == 'm') {
+    else if (receive[0] == 'm') {
         setNewMode(byte(receive[1]) - '0');
         currMode = byte(receive[1]) - '0';
         File setMode = SD.open("/current_mode.txt", FILE_WRITE);
         setMode.print(char(currMode));
         setMode.close();
     }
-    else if (receivedChar[0] == 's') {
-        mode->setParam(byte(receivedChar[1]) - 'a' + 1, String(receivedChar + 2).toInt());
+    else if (receive[0] == 's') {
+        mode->setParam(byte(receive[1]) - 'a' + 1, String(receive.substring(2)).toInt());
         File setSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_READ);
         String currProfile = setSettings.readString();
         setSettings.close();
@@ -701,39 +724,39 @@ void serialHandler(String receive) {
         setSettings.print(mode->getAllParameters());
         setSettings.close();
     }
-    else if (receivedChar[0] == 'p') {
+    else if (receive[0] == 'p') {
         File profileSettings;
-        if (receivedChar[1] == 's') {
-            if (SD.exists("/mode_settings/mode_" + String(currMode) + "/profile_" + String(receivedChar + 2) + ".txt")) {
+        if (receive[1] == 's') {
+            if (SD.exists("/mode_settings/mode_" + String(currMode) + "/profile_" + String(receive.substring(2)) + ".txt")) {
                 profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
-                profileSettings.print(receivedChar + 2);
+                profileSettings.print(receive.substring(2));
                 profileSettings.close();
                 setNewMode(currMode);
-                Serial.println("Profile set to \"" + String(receivedChar + 2) + "\"!");
+                Serial.println("Profile set to \"" + String(receive.substring(2)) + "\"!");
             }
             else {
-                Serial.println("Profile \"" + String(receivedChar + 2) + "\" does not exist!");
+                Serial.println("Profile \"" + String(receive.substring(2)) + "\" does not exist!");
             }
         }
-        else if (receivedChar[1] == 'n') {
+        else if (receive[1] == 'n') {
             profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/profile_" +
-                String(receivedChar + 2) + ".txt", FILE_WRITE);
+                String(receive.substring(2)) + ".txt", FILE_WRITE);
             profileSettings.print(mode->getAllParameters());
             profileSettings.close();
             profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
-            profileSettings.print(receivedChar + 2);
+            profileSettings.print(receive.substring(2));
             profileSettings.close();
             setNewMode(currMode);
-            Serial.println("Create new profile \"" + String(receivedChar + 2) + "\"!");
+            Serial.println("Create new profile \"" + String(receive.substring(2)) + "\"!");
         }
-        else if (receivedChar[1] == 'd') {
-            if (String(receivedChar + 2).equals("default")) {
+        else if (receive[1] == 'd') {
+            if (String(receive.substring(2)).equals("default")) {
                 Serial.println("You can't delete default profile!");
             }
             else {
                 profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_READ);
                 String buf = profileSettings.readString();
-                if (buf.equals(String(receivedChar + 2))) {
+                if (buf.equals(String(receive.substring(2)))) {
                     profileSettings.close();
                     profileSettings = SD.open("/mode_settings/mode_" + String(currMode) + "/current_profile.txt", FILE_WRITE);
                     profileSettings.print("default");
@@ -742,11 +765,11 @@ void serialHandler(String receive) {
                 }
                 profileSettings.close();
                 SD.remove("/mode_settings/mode_" + String(currMode) + "/profile_" +
-                    String(receivedChar + 2) + ".txt");
-                Serial.println("Profile \"" + String(receivedChar + 2) + "\" deleted!");
+                    String(receive.substring(2)) + ".txt");
+                Serial.println("Profile \"" + String(receive.substring(2)) + "\" deleted!");
             }
         }
-        else if (receivedChar[1] == 'g') {
+        else if (receive[1] == 'g') {
             Serial.println("There all profiles!");
             if (NuSerial.isConnected())
                 NuSerial.println("There all profiles!");
@@ -765,36 +788,55 @@ void serialHandler(String receive) {
             profileSettings.close();
         }
     }
-    else if (receivedChar[0] == 'a') {
+    else if (receive[0] == 'a') {
         Serial.println("Parameters was changed!");
-        mode->setAllParam(String(receivedChar + 1), ';');
+        mode->setAllParam(String(receive.substring(1)), ';');
     }
-    else if (receivedChar[0] == 'w') {
-        if (receivedChar[1] == 's') {
-            wifiSsid = String(receivedChar + 2);
+    else if (receive[0] == 'w') {
+        if (receive[1] == 's') {
+            wifiSsid = String(receive.substring(2));
             File ssid = SD.open("/wifi/ssid.txt", FILE_WRITE);
             ssid.print(wifiSsid);
             ssid.close();
             Serial.println("Wifi SSID was changed to \"" + wifiSsid + "\"!");
         }
-        else if (receivedChar[1] == 'p') {
-            wifiPassword = String(receivedChar + 2);
+        else if (receive[1] == 'p') {
+            wifiPassword = String(receive.substring(2));
             File password = SD.open("/wifi/password.txt", FILE_WRITE);
             password.print(wifiPassword);
             password.close();
             Serial.println("Wifi password was changed to \"" + wifiPassword + "\"!");
         }
     }
-    else if (receivedChar[0] == 't') {
-        if (receivedChar[1] == 'z') {
-            timeZone = String(receivedChar + 2).toInt();
+    else if (receive[0] == 't') {
+        if (receive[1] == 'z') {
+            uint8_t timeZone = String(receive.substring(2)).toInt();
             File zone = SD.open("/time/time_zone.txt", FILE_WRITE);
             zone.print(timeZone);
             zone.close();
+            alarmManager->setTimeZone(timeZone);
             Serial.println("Time zone was changed to \"" + String(timeZone) + "\"!");
         }
+        else if (receive[1] == 'o') {
+            alarmManager->offAlarm();
+            Serial.println("Alarm was canceled!");
+        }
+        else if (receive[1] == 'n') {
+            Serial.println(receive);
+            String name = receive.substring(2, receive.indexOf('\t'));
+            File alarm = SD.open(String("/time/alarms/") + name + ".txt", FILE_WRITE);
+            alarm.print(receive.substring(receive.indexOf('\t') + 1));
+            alarm.close();
+            alarmManager->findClosest();
+            Serial.println("Added new alarm \"" + name + "\"!");
+        }
+        else if (receive[1] == 'd') {
+            SD.remove("/time/alarms/" + String(receive.substring(2)) + ".txt");
+            alarmManager->findClosest();
+            Serial.println("Removed alarm \"" + String(receive.substring(2)) + "\"!");
+        }
     }
-    else if (receivedChar[0] == 'r') {
+    else if (receive[0] == 'r') {
         Serial.println("Rebooting now...");
         reset();
     }
@@ -812,18 +854,19 @@ void showTaskCode(void *pvParameters) {
     getMode.close();
     setNewMode(currMode);
     while (true) {
+        delay(1);
+        if (alarmManager != nullptr)
+            if (alarmManager->checkIsActive()) {
+                alarmManager->update(leds, &NUM_LEDS, &modeTimer);
+                continue;
+            }
         if (isActive)
             mode->show(leds, &NUM_LEDS, &modeTimer);
-        delay(1);
     }
 }
 void handlerTaskCode(void *pvParameters) {
-    NimBLEDevice::init("test");
-    NimBLEDevice::setMTU(517);
-    NuSerial.setTimeout(10);
-    NuSerial.start();
-
     File file = SD.open("/wifi/ssid.txt", FILE_READ);
+    File bufFile;
     wifiSsid = file.readString();
     file.close();
     file = SD.open("/wifi/password.txt", FILE_READ);
@@ -831,54 +874,95 @@ void handlerTaskCode(void *pvParameters) {
     file.close();
 
     WiFi.begin(wifiSsid, wifiPassword);
-    auto* wifiTime = new uint32_t;
-    *wifiTime = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - *wifiTime < 3000) {}
-    if (WiFi.status() != WL_CONNECTED) {
+    uint32_t timer = millis();
+    while (WiFiClass::status() != WL_CONNECTED && millis() - timer < 5000) {}
+    if (WiFiClass::status() != WL_CONNECTED)
         Serial.println("WiFi not connected!");
-    }
-    delete wifiTime;
 
     file = SD.open("/time/time_zone.txt", FILE_READ);
-    timeZone = file.readString().toInt();
+    uint8_t timeZone = file.readString().toInt();
     file.close();
-    timeNow = new Time();
 
-    // file = SD.open("/time/alarms/1.txt", FILE_WRITE);
-    // file.print(String(char(192)) + String(char(59)) + String(char(23)) + String(char(240)) + String(char(3)));
-    // file.close();
-    Alarms alarms;
-    alarms.findClosest();
-    // Serial.println(String(char(192)) + String(char(59)) + String(char(23)) + String(char(240)) + String(char(3)));
-    // file = SD.open("/time/alarms/1.txt", FILE_READ);
-    String b = alarms.getAlarm()/*file.readString()*/;
-    for (int i = 0; i < 5; i++) {
-        Serial.print(String(byte(b[i])) + "(" + b[i] + ")" + "\t");
-    }
-    // file.close();
+    file = SD.open("/name.txt", FILE_READ);
+    NimBLEDevice::init(file.readString().c_str());
+    file.close();
+    NimBLEDevice::setMTU(517);
+    NuSerial.setTimeout(10);
+    NuSerial.start();
+
+    alarmManager = new AlarmManager(timeZone);
 
     while (true) {
         // работа с BLE
         String stat = "";
         if (NuSerial.available()) {
-            stat = NuSerial.readStringUntil('\n');
+            stat = NuSerial.readString();
             if (stat.length() > 0) {
-                serialHandler(stat + "12");
+                serialHandler(stat);
                 Serial.println(stat);
+                for (char c : stat)
+                    Serial.print(String() + byte(c) + " ");
+                Serial.println();
             }
         }
         digitalWrite(2, NuSerial.isConnected());
         if (NuSerial.isConnected() && !isConnected) {
-            delay(1000); // todo узнать насколько оно надо
-            NuSerial.println(version);
-            while (true) {
+            delay(1500);
+            NuSerial.println(VERSION);
+            timer = millis();
+            while (millis() - timer < 1500) {
                 String data = NuSerial.readString();
                 if (data.length() > 0) {
-                    if (!data.toInt())
+                    if (!data.toInt()) {
                         NuSerial.disconnect();
+                        timer = millis() - 1500;
+                    }
                     break;
                 }
             }
+            if (millis() - timer >= 1500) {
+                NuSerial.disconnect();
+                continue;
+            }
+            // отправка всех настроек на устройство
+            NuSerial.println(String("isOn\t") + int(isActive));
+            file = SD.open("/name.txt", FILE_READ);
+            NuSerial.println(String("name\t") + file.readString());
+            file.close();
+            file = SD.open("/wifi/ssid.txt", FILE_READ);
+            NuSerial.println(String("ssid\t") + file.readString());
+            file.close();
+            file = SD.open("/wifi/password.txt", FILE_READ);
+            NuSerial.println(String("password\t") + file.readString());
+            file.close();
+            NuSerial.println(String("current_mode\t") + char(currMode));
+            for (byte i = 0; i < MODE_COUNT; ++i) {
+                NuSerial.println(String("mode\t") + char(i));
+                file = SD.open("/mode_settings/mode_" + String(i), FILE_READ);
+                while (true) {
+                    bufFile = file.openNextFile();
+                    if (!bufFile) break;
+                    NuSerial.println(String(bufFile.name()) + "\t" + bufFile.readString());
+                }
+                bufFile.close();
+                file.close();
+            }
+
+            file = SD.open("/time/time_zone.txt", FILE_READ);
+            NuSerial.println(String("time_zone\t") + char(file.readString().toInt()));
+            file.close();
+            NuSerial.println("alarms_start");
+            file = SD.open("/time/alarms", FILE_READ);
+            while (true) {
+                bufFile = file.openNextFile();
+                if (!bufFile) break;
+                NuSerial.println(String(bufFile.name()) + "\t" +  bufFile.readString());
+            }
+            file.close();
+            bufFile.close();
+            NuSerial.println("alarms_stop");
+            if (alarmManager->checkIsActive())
+                NuSerial.println("alarm_activated");
         }
         isConnected = NuSerial.isConnected();
         // работа с Serial портом
@@ -890,16 +974,18 @@ void handlerTaskCode(void *pvParameters) {
                 receive = "";
             }
         }
-
-        // timeNow.updateTime(timeZone);
-        // Serial.printf("Время в Москве: %01d:%02d:%02d\n", timeNow.getDay(), timeNow.getHour(), timeNow.getMinute());
-        // delay(1000);
+        // проверка времени и будильника
+        if (millis() - alarmTimer > 5000) {
+            alarmTimer = millis();
+            alarmManager->checkAlarm();
+        }
     }
 }
 
 void setup() {
     Serial.begin(115200);
     Serial.setTimeout(100);
+    digitalWrite(2, LOW);
 
     if (!SD.begin(SD_PIN)) {
         Serial.println("SD card not initialized!");
