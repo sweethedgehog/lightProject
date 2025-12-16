@@ -46,7 +46,7 @@ public:
     virtual void calculate(CRGB *leds, const long *ledCount) {}
     // основная логика таймера и вызов функции calculate
     void show(CRGB *leds, const long *ledCount, uint32_t *timer) {
-        if (millis() - *timer > float(delayTime) / speed * 100) {
+        if (millis() - *timer > float(delayTime) / speed * 100 && started) {
             // debugTimer = millis(); // логика таймера для замера времени выполнения
             *timer = millis();
             calculate(leds, ledCount);
@@ -55,8 +55,11 @@ public:
             // Serial.println("time: " + String(millis() - debugTimer)); // вывод таймера для замера времени выполнения
         }
     }
+    // запустить режим
+    void start() {started = true;}
 private:
     // unsigned long debugTimer = 0; // таймер для определения времени выполнения
+    bool started = false;
     /// настраиваемые параметры
     byte speed = 100;
     byte brightness = 50;
@@ -69,8 +72,8 @@ protected:
     }
     // рассчитывает яркость светодиода для бегущего огонька (в HSV это 3-й параметр)
     byte calculateRunLight(long i, byte gap, byte tailSize, bool direction,
-        byte* run, uint32_t delayRunTime, byte* moveCounter) {
-        if (i == 0) {
+        byte* run, uint32_t delayRunTime, byte* moveCounter, bool hasToRun = false) {
+        if (hasToRun) {
             if (/*uint32_t(millis() / int(float(delayTime) / speed * 100)) % (delayRunTime / delayTime) == 0*/
                 *moveCounter >= delayRunTime / delayTime + bool(delayRunTime % delayTime) - 1) {
                 *moveCounter = 0;
@@ -88,7 +91,7 @@ protected:
     static long randomIntSeeded(long minValue, long maxValue, uint32_t seed, byte a = 0, byte b = 0) {
         return minValue + (seed ^ ((214013 - a) * seed + (2531011 - b) >> 15)) % (maxValue - minValue + 1);
     }
-
+    // временя ожидания между кадрами
     byte delayTime;
 };
 
@@ -146,7 +149,7 @@ public:
     }
     void calculate(CRGB *leds, const long *ledCount) override {
         for (long i = 0; i < *ledCount / (twoSides + 1) + twoSides * (*ledCount % 2); i++) {
-            byte brightnessForLed = calculateRunLight(i, gap, tailSize, true, &run, runLightDelay, &moveCounter);
+            byte brightnessForLed = calculateRunLight(i, gap, tailSize, true, &run, runLightDelay, &moveCounter, !i);
             byte rainbowHue = calculateRainbow(i, &base, rainbowCount, ledCount, twoSides);
             leds[direction ? i : *ledCount / (twoSides + 1) - i - 1 + twoSides] =
                     CHSV(isRainbow ? rainbowHue : hue,
@@ -229,8 +232,7 @@ public:
         long free = 0;
         for (long i = 0; i < *ledCount; i++) {
             leds[i] -= CHSV(0, 0, descendingStep);
-            if (rgb2hsv_approximate(leds[i]).raw[2] == 0)
-                free++;
+            if (rgb2hsv_approximate(leds[i]).raw[2] == 0) free++;
         }
         while (free > *ledCount - *ledCount / ratio) {
             long i = random(*ledCount);
@@ -316,7 +318,7 @@ public:
         for (long i = 0; i < *ledCount; i++) {
             leds[i] = CHSV((perlinNoise(i, float(gridWidth) / *ledCount, float(yScale) / 1000) + 1)
                 * hueScale + hueOffset,255 - saturation, !isRunningLight ? 255 : i <= *ledCount / 2 ?
-                calculateRunLight(i, gap, tailSize, direction, &run, runLightDelay, &moveCounter) :
+                calculateRunLight(i, gap, tailSize, direction, &run, runLightDelay, &moveCounter, !i) :
                 calculateRunLight(*ledCount - i - 1, gap, tailSize, direction, &run, runLightDelay, &moveCounter));
         }
         y++;
@@ -440,7 +442,6 @@ public:
     }
     void findClosest() {
         timeNow->updateTime(timeZone);
-
         File file;
         File alarms = SD.open("/time/alarms", FILE_READ);
         alarm = Alarm();
@@ -479,6 +480,7 @@ public:
             // case 3:
             //     mode = new IridescentLights(20, &NUM_LEDS, leds);
         }
+        mode->start();
         file = SD.open("/mode_settings/mode_" + String(alarm.mode) + "/profile_" + alarm.profile + ".txt", FILE_READ);
         long buf = long(file.read());
         byte i = 1;
@@ -490,9 +492,8 @@ public:
         file.close();
     }
     void update(CRGB *leds, const long *ledCount, uint32_t *timer) {
+        mode->setParam(1, byte(_min(long(float(millis() - startAlarm) / 60000 * 255 / alarm.razingTime), 255)));
         mode->show(leds, ledCount, timer);
-        long buf = long(float(millis() - startAlarm) / 60000 * 255 / alarm.razingTime);
-        mode->setParam(1, byte(min(buf, long(255))));
     }
     void checkAlarm() {
         if (timeNow != nullptr && WiFi.status() == WL_CONNECTED) {
@@ -501,8 +502,7 @@ public:
                 if (alarm.getRawTimeDif(timeNow->getRawTime()) == 0 && !isActive) {
                     startAlarm = millis();
                     isActive = true;
-                    if (NuSerial.isConnected())
-                        NuSerial.println("alarm_activated");
+                    if (NuSerial.isConnected()) NuSerial.println("alarm_activated");
                 }
             }
         }
@@ -512,14 +512,14 @@ public:
         isActive = false;
         findClosest();
     }
-    void setTimeZone(uint8_t timeZone){this->timeZone = timeZone;}
+    void setTimeZone(int8_t timeZone){this->timeZone = timeZone;}
 private:
     class Time {
     public:
         explicit Time (byte serv) {
             udp.begin(serv);
         }
-        void updateTime(byte timeZone) {
+        void updateTime(int8_t timeZone) {
             byte packet[48];
             packet[0] = 0b11100011;
             udp.beginPacket("pool.ntp.org", 123);
@@ -537,9 +537,7 @@ private:
             hour = (epoch % 86400) / 3600;
             minute = (epoch % 3600) / 60;
         }
-        long getRawTime() {
-            return getDay() * 1440 + getHour() * 60 + getMinute();
-        }
+        long getRawTime() const {return getDay() * 1440 + getHour() * 60 + getMinute();}
         byte getDay() const {return day;}
         byte getHour() const {return hour;}
         byte getMinute() const {return minute;}
@@ -553,8 +551,7 @@ private:
         Alarm (String data) {
             const char *bytes = data.c_str();
             isOn = bytes[0] / 128;
-            for (byte i = 0; i < 7; i++)
-                days[i] = bool(long(bytes[0] % long(pow(2, i + 1)) / pow(2, i)));
+            for (byte i = 0; i < 7; i++) days[i] = bool(long(bytes[0] % long(pow(2, i + 1)) / pow(2, i)));
             minute = bytes[1];
             hour = bytes[2];
             razingTime = bytes[3];
@@ -567,16 +564,14 @@ private:
             long minTime = -1;
             for (byte i = 0; i < 7; i++) {
                 long buf = (i * 1440 + hour * 60 + minute - rawTime + 10080) % 10080;
-                if ((minTime == -1 || buf < minTime) && days[i])
-                    minTime = buf;
+                if ((minTime == -1 || buf < minTime) && days[i]) minTime = buf;
             }
             return minTime;
         }
         String getSettings() {
             String ans;
             char buf = char(128 * isOn);
-            for (byte i = 0; i < 7; i++)
-                buf += days[i] * pow(2, i);
+            for (byte i = 0; i < 7; i++) buf += days[i] * pow(2, i);
             ans += buf;
             ans += char(minute);
             ans += char(hour);
@@ -587,9 +582,7 @@ private:
         String getRawSettings() {
             String ans;
             ans += byte(isOn);
-            for (byte i = 0; i < 7; i++) {
-                ans += days[i];
-            }
+            for (byte i = 0; i < 7; i++) ans += days[i];
             ans += minute;
             ans += hour;
             ans += razingTime;
@@ -607,7 +600,7 @@ private:
     };
     Alarm alarm;
     Time *timeNow = nullptr;
-    uint8_t timeZone = 3;
+    int8_t timeZone = 3;
     bool isActive = false;
     Mode *mode = nullptr;
     uint32_t startAlarm = 0;
@@ -616,7 +609,7 @@ private:
 #define VERSION "1.0"
 #define MODE_COUNT 4
 
-// Константы
+// Константы (на люстре 82, на стенде 61)
 const long NUM_LEDS = 61;
 #define LED_PIN 12
 #define FREE_PIN 34
@@ -644,7 +637,7 @@ String receive;
 // Для BLE todo убрать подсветку BLE
 bool isConnected = false;
 
-// Для остановки выполнения todo скорее всего надо будет убрать
+// Для выключения ленты
 bool isActive = true;
 
 void(* reset) () = nullptr;
@@ -675,6 +668,7 @@ void setNewMode(byte modeNumber) {
         i++;
         buf = long(modeSettings.read());
     }
+    mode->start();
     modeSettings.close();
 }
 String convertRawToSimple(String raw, char separateSymbol, char endSymbol) {
@@ -810,7 +804,7 @@ void serialHandler(String receive) {
     }
     else if (receive[0] == 't') {
         if (receive[1] == 'z') {
-            uint8_t timeZone = String(receive.substring(2)).toInt();
+            int8_t timeZone = String(receive.substring(2)).toInt();
             File zone = SD.open("/time/time_zone.txt", FILE_WRITE);
             zone.print(timeZone);
             zone.close();
@@ -819,10 +813,11 @@ void serialHandler(String receive) {
         }
         else if (receive[1] == 'o') {
             alarmManager->offAlarm();
+            FastLED.clear();
+            FastLED.show();
             Serial.println("Alarm was canceled!");
         }
         else if (receive[1] == 'n') {
-            Serial.println(receive);
             String name = receive.substring(2, receive.indexOf('\t'));
             File alarm = SD.open(String("/time/alarms/") + name + ".txt", FILE_WRITE);
             alarm.print(receive.substring(receive.indexOf('\t') + 1));
@@ -876,8 +871,7 @@ void handlerTaskCode(void *pvParameters) {
     WiFi.begin(wifiSsid, wifiPassword);
     uint32_t timer = millis();
     while (WiFiClass::status() != WL_CONNECTED && millis() - timer < 5000) {}
-    if (WiFiClass::status() != WL_CONNECTED)
-        Serial.println("WiFi not connected!");
+    if (WiFiClass::status() != WL_CONNECTED) Serial.println("WiFi not connected!");
 
     file = SD.open("/time/time_zone.txt", FILE_READ);
     uint8_t timeZone = file.readString().toInt();
@@ -900,8 +894,7 @@ void handlerTaskCode(void *pvParameters) {
             if (stat.length() > 0) {
                 serialHandler(stat);
                 Serial.println(stat);
-                for (char c : stat)
-                    Serial.print(String() + byte(c) + " ");
+                for (char c : stat) Serial.print(String() + byte(c) + " ");
                 Serial.println();
             }
         }
@@ -967,12 +960,14 @@ void handlerTaskCode(void *pvParameters) {
         isConnected = NuSerial.isConnected();
         // работа с Serial портом
         if (Serial.available()) {
-            receive += Serial.readString();
-            if (receive[receive.length() - 1] == '\n') {
+            String buf = Serial.readString();
+            if (buf.endsWith("\n")) {
                 serialHandler(receive);
-                Serial.print(receive);
+                Serial.println(receive);
                 receive = "";
             }
+            else
+                receive += buf;
         }
         // проверка времени и будильника
         if (millis() - alarmTimer > 5000) {
